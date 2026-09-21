@@ -1,0 +1,67 @@
+import json
+from pathlib import Path
+g = json.load(open('experiments/results/day13_6_final_real_live_gate.json', encoding='utf-8'))
+m = json.load(open('experiments/results/day13_6_final_manifest.json', encoding='utf-8'))
+print('=== day13_6_final_real_live_gate.json ===')
+print(f'  experiment_type:        {g["experiment_type"]}')
+print(f'  provider:               {g["provider"]}')
+print(f'  model:                  {g["model"]}')
+print(f'  enable_thinking:        {g["enable_thinking"]}')
+print(f'  test_a.passed:          {g["test_a"]["passed"]}')
+print(f'  test_b.passed:          {g["test_b"]["passed"]}')
+print(f'  test_c.passed:          {g["test_c"]["passed"]}')
+print(f'  test_c.status:          {g["test_c"]["status"]}')
+print(f'  test_c.real_llm_calls_in_recovery: {g["test_c"]["real_llm_calls_in_recovery"]}')
+print(f'  test_c.financial_real_llm_calls:   {g["test_c"]["financial_real_llm_calls"]}')
+print(f'  test_c.user_real_llm_calls:        {g["test_c"]["user_real_llm_calls"]}')
+print(f'  test_c.operation_real_llm_calls:   {g["test_c"]["operation_real_llm_calls"]}')
+print(f'  test_c.semantic_clean_path_pass:   {g["test_c"]["semantic_clean_path_pass"]}')
+print(f'  gate_checks count:      {len(g["gate_checks"])}/26')
+print(f'  gate_checks all True:   {all(g["gate_checks"].values())}')
+print(f'  live_gate_pass:         {g["live_gate_pass"]}')
+print(f'  full_benchmark_allowed: {g["full_benchmark_allowed"]}')
+print(f'  verified_real_request_count_total:  {g["verified_real_request_count_total"]}')
+print(f'  verified_provider_reported_token_total: {g["verified_provider_reported_token_total"]}')
+print(f'  current_invocation_real_request_count:  {g["current_invocation_real_request_count"]}')
+print(f'  current_invocation_provider_reported_tokens:  {g["current_invocation_provider_reported_tokens"]}')
+print(f'  real_provider_requests_used_for_offline_corrections: {g["real_provider_requests_used_for_offline_corrections"]}')
+print(f'  real_provider_requests_used_in_test_c_recovery:    {g["real_provider_requests_used_in_test_c_recovery"]}')
+print(f'  successful_real_llm_artifact_materializations:      {g["successful_real_llm_artifact_materializations"]}')
+print()
+print('=== final mixed-version provenance ===')
+prov = g['final_mixed_version_provenance']
+for k, v in prov.items():
+    print(f'  {k}: {v}')
+print()
+print('=== historical fault trail (preserved) ===')
+for k, v in g['historical_fault_trail'].items():
+    print(f'  {k}: {v}')
+print()
+print('=== per_test real request count ===')
+pt = g['per_test_real_request_count']
+for k, v in pt.items():
+    print(f'  {k}: {v}')
+print()
+print('=== clean_path_audit ===')
+cpa = g['clean_path_audit']
+print(f'  passed:           {cpa["passed"]}')
+print(f'  visited_refs:     {len(cpa["visited_refs"])}')
+print(f'  non_clean_refs:   {len(cpa["non_clean_refs"])}')
+print(f'  missing_refs:     {len(cpa["missing_refs"])}')
+print(f'  reason:           {cpa["reason"]!r}')
+print(f'  graph_rebuilt:    {cpa["graph_rebuilt_after_recovery"]}')
+print()
+print('=== corrections ===')
+for c in g['corrections']:
+    print(f'  - {c["original_failure_file"]}: {c["failure_type"]}')
+    if 'failure_subtype' in c:
+        print(f'    subtype: {c["failure_subtype"]}')
+    print(f'    fix: {c["fix"]}')
+print()
+print('=== day13_6_final_manifest.json ===')
+print(f'  no_api_key_anywhere: {m["no_api_key_anywhere"]}')
+for key, entry in m['files'].items():
+    sz = entry.get('size_bytes', 'n/a')
+    sha = entry.get('sha256', 'n/a')[:16]
+    cnt = entry.get('artifact_json_count', '')
+    print(f'  {key:<24}: size={sz} sha256={sha}... {cnt}')

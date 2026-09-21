@@ -1,0 +1,51 @@
+{
+  "files": {
+    "experiments/results/day13_5_live_gate.json": {
+      "sha256": "51e4650ba3930f266ac4dcfeb6d3021ab7f1835da8ff2e2ee42fb9274fc7c79d",
+      "size_bytes": 7458
+    },
+    "experiments/results/day13_5_test_a_state.json": {
+      "sha256": "f4d1f5ad8913a894ca0281e232b9ac5e1709795c29bfdecf97d44aecebc42601",
+      "size_bytes": 5614
+    },
+    "experiments/results/day13_5_test_b_state.json": {
+      "sha256": "b4f35cf4fdc16ce7cd7fb15d038c94d89238bbcd57db51e7a35564bb589035a5",
+      "size_bytes": 2663
+    },
+    "experiments/results/day13_5_real_failure_a_001.json": {
+      "sha256": "a59e8cd2ed26981a90e0e9dff196fd8878a5b607f0a0c8f0c1667ec71a49157a",
+      "size_bytes": 2870
+    },
+    "experiments/results/day13_5_test_a_state_PASS_backup.json": {
+      "sha256": "4593fc68fc8f7690d0192a74dff4541018c0d915c70d964535cdfb91d414096a",
+      "size_bytes": 4902
+    },
+    "experiments/results/day13_6_real_test_c_failure_001.json": {
+      "sha256": "e9be8d3fef202d3a21017e9adf11c19a4274d4de2a6ed1ad6b94e5da0860523e",
+      "size_bytes": 5567
+    },
+    "experiments/results/day13_6_real_test_c_failure_002.json": {
+      "sha256": "5d9da98d2fbc02ea998dce54db1da61eeb4223407eba68f568843119a63dba3b",
+      "size_bytes": 6361
+    },
+    "experiments/results/day13_6_live_test_c_offline_reaudit.json": {
+      "sha256": "870631c9b781e44e359b697391869d3468ab37802752d74052f237533cd2188b",
+      "size_bytes": 3376
+    },
+    "experiments/results/day13_6_final_real_live_gate.json": {
+      "sha256": "aca0caf1b1cb4771c22ace235b63e0b63cc6bc3eeed8a8256f2f0deb6a7fce48",
+      "size_bytes": 10869
+    },
+    "experiments/results/day13_6_final_manifest.json": {
+      "sha256": "e8980cf1a23c07a4aaae397a9c6e47f8d63f6959de8118ccc54771aa00778e3e",
+      "size_bytes": 2473
+    }
+  },
+  "directories": {
+    "experiments/results/day13_6_live_test_c_store": {
+      "sha256": "963d4dc4ed0d58217b68e9aa791fe5eeb0254d3c9e7c62c004c80d3c3041b946",
+      "size_bytes": 57102,
+      "json_count": 38
+    }
+  }
+}

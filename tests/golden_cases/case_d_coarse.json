@@ -1,0 +1,1 @@
+{"case_id":"CASE_D","contamination_type":"heavy_data_corruption","variant":"coarse","input":{"total_nodes":10,"invalidated_nodes":["field_heavy"],"contaminated_nodes":["metric_heavy","claim_heavy","section_heavy","report"]},"expected":{"strategy":"COARSE_CHECKPOINT","affected_nodes":["field_heavy","metric_heavy","claim_heavy","section_heavy","report"],"minimum_reduction":0.5}}

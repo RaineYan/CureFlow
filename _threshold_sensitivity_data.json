@@ -1,0 +1,90 @@
+[
+  {
+    "affected_count": 0,
+    "total_count": 24,
+    "affected_ratio": 0.0,
+    "affected_ratio_pct": "0.00%",
+    "selected_strategy": "SELECTIVE_RECOVERY",
+    "reason": "受影响比例低于 30%，仅恢复污染子图"
+  },
+  {
+    "affected_count": 1,
+    "total_count": 24,
+    "affected_ratio": 0.041667,
+    "affected_ratio_pct": "4.17%",
+    "selected_strategy": "SELECTIVE_RECOVERY",
+    "reason": "受影响比例低于 30%，仅恢复污染子图"
+  },
+  {
+    "affected_count": 3,
+    "total_count": 24,
+    "affected_ratio": 0.125,
+    "affected_ratio_pct": "12.50%",
+    "selected_strategy": "SELECTIVE_RECOVERY",
+    "reason": "受影响比例低于 30%，仅恢复污染子图"
+  },
+  {
+    "affected_count": 6,
+    "total_count": 24,
+    "affected_ratio": 0.25,
+    "affected_ratio_pct": "25.00%",
+    "selected_strategy": "SELECTIVE_RECOVERY",
+    "reason": "受影响比例低于 30%，仅恢复污染子图"
+  },
+  {
+    "affected_count": 7,
+    "total_count": 24,
+    "affected_ratio": 0.291667,
+    "affected_ratio_pct": "29.17%",
+    "selected_strategy": "SELECTIVE_RECOVERY",
+    "reason": "受影响比例低于 30%，仅恢复污染子图"
+  },
+  {
+    "affected_count": 8,
+    "total_count": 24,
+    "affected_ratio": 0.333333,
+    "affected_ratio_pct": "33.33%",
+    "selected_strategy": "COARSE_CHECKPOINT",
+    "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+  },
+  {
+    "affected_count": 10,
+    "total_count": 24,
+    "affected_ratio": 0.416667,
+    "affected_ratio_pct": "41.67%",
+    "selected_strategy": "COARSE_CHECKPOINT",
+    "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+  },
+  {
+    "affected_count": 12,
+    "total_count": 24,
+    "affected_ratio": 0.5,
+    "affected_ratio_pct": "50.00%",
+    "selected_strategy": "COARSE_CHECKPOINT",
+    "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+  },
+  {
+    "affected_count": 16,
+    "total_count": 24,
+    "affected_ratio": 0.666667,
+    "affected_ratio_pct": "66.67%",
+    "selected_strategy": "COARSE_CHECKPOINT",
+    "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+  },
+  {
+    "affected_count": 17,
+    "total_count": 24,
+    "affected_ratio": 0.708333,
+    "affected_ratio_pct": "70.83%",
+    "selected_strategy": "FULL_RERUN",
+    "reason": "受影响比例达到或超过 70%，执行全量重跑"
+  },
+  {
+    "affected_count": 24,
+    "total_count": 24,
+    "affected_ratio": 1.0,
+    "affected_ratio_pct": "100.00%",
+    "selected_strategy": "FULL_RERUN",
+    "reason": "受影响比例达到或超过 70%，执行全量重跑"
+  }
+]

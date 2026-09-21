@@ -1,0 +1,1 @@
+{"case_id":"CASE_C","contamination_type":"evidence_reference_error","variant":"coarse","input":{"total_nodes":10,"invalidated_nodes":["evidence_ref"],"contaminated_nodes":["claim_cited","section_cited","report","ledger"]},"expected":{"strategy":"COARSE_CHECKPOINT","affected_nodes":["evidence_ref","claim_cited","section_cited","report","ledger"],"minimum_reduction":0.5}}

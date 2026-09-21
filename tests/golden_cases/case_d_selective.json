@@ -1,0 +1,1 @@
+{"case_id":"CASE_D","contamination_type":"heavy_data_corruption","variant":"selective","input":{"total_nodes":10,"invalidated_nodes":["field_heavy"],"contaminated_nodes":["metric_heavy"]},"expected":{"strategy":"SELECTIVE_RECOVERY","affected_nodes":["field_heavy","metric_heavy"],"minimum_reduction":0.8}}

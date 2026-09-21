@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+markers = [
+    "live_llm: marks tests that make real network calls to an LLM provider. Only run with: pytest -m live_llm",
+]
+# Default: do NOT run live_llm tests.  Run with `-m live_llm` to
+# opt in.  When the env var REAL_LLM_API_KEY is unset, live_llm
+# tests skip via the per-test fixture.
+addopts = "-ra"
+testpaths = ["tests"]

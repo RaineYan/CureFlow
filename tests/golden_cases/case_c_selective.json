@@ -1,0 +1,1 @@
+{"case_id":"CASE_C","contamination_type":"evidence_reference_error","variant":"selective","input":{"total_nodes":10,"invalidated_nodes":["evidence_ref"],"contaminated_nodes":["claim_cited"]},"expected":{"strategy":"SELECTIVE_RECOVERY","affected_nodes":["evidence_ref","claim_cited"],"minimum_reduction":0.8}}

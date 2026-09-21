@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "1.0",
+  "selectiveThreshold": 0.3,
+  "fullThreshold": 0.7,
+  "rows": [
+    {
+      "affectedCount": 0,
+      "totalCount": 100,
+      "affectedRatio": 0.0,
+      "selectedStrategy": "SELECTIVE_RECOVERY",
+      "reason": "受影响比例低于 30%，仅恢复污染子图"
+    },
+    {
+      "affectedCount": 29,
+      "totalCount": 100,
+      "affectedRatio": 0.29,
+      "selectedStrategy": "SELECTIVE_RECOVERY",
+      "reason": "受影响比例低于 30%，仅恢复污染子图"
+    },
+    {
+      "affectedCount": 30,
+      "totalCount": 100,
+      "affectedRatio": 0.3,
+      "selectedStrategy": "COARSE_CHECKPOINT",
+      "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+    },
+    {
+      "affectedCount": 31,
+      "totalCount": 100,
+      "affectedRatio": 0.31,
+      "selectedStrategy": "COARSE_CHECKPOINT",
+      "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+    },
+    {
+      "affectedCount": 50,
+      "totalCount": 100,
+      "affectedRatio": 0.5,
+      "selectedStrategy": "COARSE_CHECKPOINT",
+      "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+    },
+    {
+      "affectedCount": 69,
+      "totalCount": 100,
+      "affectedRatio": 0.69,
+      "selectedStrategy": "COARSE_CHECKPOINT",
+      "reason": "受影响比例介于 30%（含）与 70% 之间，从检查点恢复"
+    },
+    {
+      "affectedCount": 70,
+      "totalCount": 100,
+      "affectedRatio": 0.7,
+      "selectedStrategy": "FULL_RERUN",
+      "reason": "受影响比例达到或超过 70%，执行全量重跑"
+    },
+    {
+      "affectedCount": 71,
+      "totalCount": 100,
+      "affectedRatio": 0.71,
+      "selectedStrategy": "FULL_RERUN",
+      "reason": "受影响比例达到或超过 70%，执行全量重跑"
+    },
+    {
+      "affectedCount": 100,
+      "totalCount": 100,
+      "affectedRatio": 1.0,
+      "selectedStrategy": "FULL_RERUN",
+      "reason": "受影响比例达到或超过 70%，执行全量重跑"
+    }
+  ],
+  "claim": "Sensitivity analysis only; it does not establish threshold optimality."
+}

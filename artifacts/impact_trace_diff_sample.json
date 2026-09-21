@@ -1,0 +1,701 @@
+{
+  "impact": {
+    "schemaVersion": "1.0",
+    "runId": "impact_trace_demo",
+    "summary": {
+      "totalNodes": 31,
+      "invalidatedNodes": 1,
+      "contaminatedNodes": 6,
+      "affectedNodes": 7,
+      "unaffectedNodes": 24,
+      "affectedRatio": 0.225806
+    },
+    "nodes": [
+      {
+        "ref": "impact_trace_demo/claim_financial_growth@v1",
+        "artifactId": "claim_financial_growth",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_financial_claim",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_financial_growth@v2",
+        "artifactId": "claim_financial_growth",
+        "version": 2,
+        "artifactType": "Claim",
+        "producerTask": "generate_financial_claim",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_operation@v1",
+        "artifactId": "claim_operation",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_operation_claim",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_report_financial_section@v1",
+        "artifactId": "claim_report_financial_section",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_financial_section",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_report_financial_section@v2",
+        "artifactId": "claim_report_financial_section",
+        "version": 2,
+        "artifactType": "Claim",
+        "producerTask": "generate_financial_section",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_report_operation_section@v1",
+        "artifactId": "claim_report_operation_section",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_operation_section",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_report_user_section@v1",
+        "artifactId": "claim_report_user_section",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_user_section",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/claim_user_growth@v1",
+        "artifactId": "claim_user_growth",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "generate_user_claim",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_cost_2024@v1",
+        "artifactId": "field_cost_2024",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_cost_2025@v1",
+        "artifactId": "field_cost_2025",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_orders_2024@v1",
+        "artifactId": "field_orders_2024",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_orders_2025@v1",
+        "artifactId": "field_orders_2025",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_revenue_2024@v1",
+        "artifactId": "field_revenue_2024",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_revenue_2025@v1",
+        "artifactId": "field_revenue_2025",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_revenue_2025@v2",
+        "artifactId": "field_revenue_2025",
+        "version": 2,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "INVALIDATED",
+        "directlyInvalidated": true
+      },
+      {
+        "ref": "impact_trace_demo/field_users_2024@v1",
+        "artifactId": "field_users_2024",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_users_2025@v1",
+        "artifactId": "field_users_2025",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_visits_2024@v1",
+        "artifactId": "field_visits_2024",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/field_visits_2025@v1",
+        "artifactId": "field_visits_2025",
+        "version": 1,
+        "artifactType": "Field",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_conversion_rate@v1",
+        "artifactId": "metric_conversion_rate",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_conversion_rate",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_cost_ratio@v1",
+        "artifactId": "metric_cost_ratio",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_cost_ratio",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_cost_ratio@v2",
+        "artifactId": "metric_cost_ratio",
+        "version": 2,
+        "artifactType": "Metric",
+        "producerTask": "_mcr_dec",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_order_growth@v1",
+        "artifactId": "metric_order_growth",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_order_growth",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_profit_margin@v1",
+        "artifactId": "metric_profit_margin",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_profit_margin",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_profit_margin@v2",
+        "artifactId": "metric_profit_margin",
+        "version": 2,
+        "artifactType": "Metric",
+        "producerTask": "_mpm_dec",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_revenue_growth@v1",
+        "artifactId": "metric_revenue_growth",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_revenue_growth",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_revenue_growth@v2",
+        "artifactId": "metric_revenue_growth",
+        "version": 2,
+        "artifactType": "Metric",
+        "producerTask": "_mrg_dec",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/metric_user_growth@v1",
+        "artifactId": "metric_user_growth",
+        "version": 1,
+        "artifactType": "Metric",
+        "producerTask": "compute_user_growth",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/raw_data@v1",
+        "artifactId": "raw_data",
+        "version": 1,
+        "artifactType": "RawData",
+        "producerTask": "extract_fields",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/report_merged@v1",
+        "artifactId": "report_merged",
+        "version": 1,
+        "artifactType": "Claim",
+        "producerTask": "merge_report",
+        "status": "UNAFFECTED",
+        "directlyInvalidated": false
+      },
+      {
+        "ref": "impact_trace_demo/report_merged@v2",
+        "artifactId": "report_merged",
+        "version": 2,
+        "artifactType": "Claim",
+        "producerTask": "merge_report",
+        "status": "CONTAMINATED",
+        "directlyInvalidated": false
+      }
+    ],
+    "edges": [
+      {
+        "source": "impact_trace_demo/claim_financial_growth@v1",
+        "target": "impact_trace_demo/claim_report_financial_section@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_financial_growth@v1",
+        "target": "impact_trace_demo/claim_report_financial_section@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_financial_growth@v2",
+        "target": "impact_trace_demo/claim_report_financial_section@v2",
+        "type": "EVIDENCE",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/claim_financial_growth@v2",
+        "target": "impact_trace_demo/claim_report_financial_section@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_operation@v1",
+        "target": "impact_trace_demo/claim_report_operation_section@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_operation@v1",
+        "target": "impact_trace_demo/claim_report_operation_section@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_report_financial_section@v1",
+        "target": "impact_trace_demo/report_merged@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_report_financial_section@v2",
+        "target": "impact_trace_demo/report_merged@v2",
+        "type": "INPUT",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/claim_report_operation_section@v1",
+        "target": "impact_trace_demo/report_merged@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_report_operation_section@v1",
+        "target": "impact_trace_demo/report_merged@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_report_user_section@v1",
+        "target": "impact_trace_demo/report_merged@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_report_user_section@v1",
+        "target": "impact_trace_demo/report_merged@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_user_growth@v1",
+        "target": "impact_trace_demo/claim_report_user_section@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/claim_user_growth@v1",
+        "target": "impact_trace_demo/claim_report_user_section@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_cost_2025@v1",
+        "target": "impact_trace_demo/metric_cost_ratio@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_cost_2025@v1",
+        "target": "impact_trace_demo/metric_cost_ratio@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_cost_2025@v1",
+        "target": "impact_trace_demo/metric_profit_margin@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_cost_2025@v1",
+        "target": "impact_trace_demo/metric_profit_margin@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_orders_2024@v1",
+        "target": "impact_trace_demo/metric_order_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_orders_2025@v1",
+        "target": "impact_trace_demo/metric_conversion_rate@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_orders_2025@v1",
+        "target": "impact_trace_demo/metric_order_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2024@v1",
+        "target": "impact_trace_demo/metric_revenue_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2024@v1",
+        "target": "impact_trace_demo/metric_revenue_growth@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v1",
+        "target": "impact_trace_demo/metric_cost_ratio@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v1",
+        "target": "impact_trace_demo/metric_profit_margin@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v1",
+        "target": "impact_trace_demo/metric_revenue_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v2",
+        "target": "impact_trace_demo/metric_cost_ratio@v2",
+        "type": "INPUT",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v2",
+        "target": "impact_trace_demo/metric_profit_margin@v2",
+        "type": "INPUT",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/field_revenue_2025@v2",
+        "target": "impact_trace_demo/metric_revenue_growth@v2",
+        "type": "INPUT",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/field_users_2024@v1",
+        "target": "impact_trace_demo/metric_user_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_users_2025@v1",
+        "target": "impact_trace_demo/metric_user_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/field_visits_2025@v1",
+        "target": "impact_trace_demo/metric_conversion_rate@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_conversion_rate@v1",
+        "target": "impact_trace_demo/claim_operation@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_conversion_rate@v1",
+        "target": "impact_trace_demo/claim_operation@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_cost_ratio@v1",
+        "target": "impact_trace_demo/claim_financial_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_cost_ratio@v2",
+        "target": "impact_trace_demo/claim_financial_growth@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_order_growth@v1",
+        "target": "impact_trace_demo/claim_operation@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_order_growth@v1",
+        "target": "impact_trace_demo/claim_operation@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_profit_margin@v1",
+        "target": "impact_trace_demo/claim_financial_growth@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_profit_margin@v1",
+        "target": "impact_trace_demo/claim_financial_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_profit_margin@v2",
+        "target": "impact_trace_demo/claim_financial_growth@v2",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_profit_margin@v2",
+        "target": "impact_trace_demo/claim_financial_growth@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_revenue_growth@v1",
+        "target": "impact_trace_demo/claim_financial_growth@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_revenue_growth@v1",
+        "target": "impact_trace_demo/claim_financial_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_revenue_growth@v2",
+        "target": "impact_trace_demo/claim_financial_growth@v2",
+        "type": "EVIDENCE",
+        "carriedContamination": true
+      },
+      {
+        "source": "impact_trace_demo/metric_revenue_growth@v2",
+        "target": "impact_trace_demo/claim_financial_growth@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_user_growth@v1",
+        "target": "impact_trace_demo/claim_user_growth@v1",
+        "type": "EVIDENCE",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/metric_user_growth@v1",
+        "target": "impact_trace_demo/claim_user_growth@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_cost_2024@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_cost_2025@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_orders_2024@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_orders_2025@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_revenue_2024@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_revenue_2025@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_revenue_2025@v2",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_users_2024@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_users_2025@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_visits_2024@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      },
+      {
+        "source": "impact_trace_demo/raw_data@v1",
+        "target": "impact_trace_demo/field_visits_2025@v1",
+        "type": "INPUT",
+        "carriedContamination": false
+      }
+    ],
+    "propagationPaths": [
+      [
+        "impact_trace_demo/field_revenue_2025@v2",
+        "impact_trace_demo/metric_cost_ratio@v2"
+      ],
+      [
+        "impact_trace_demo/field_revenue_2025@v2",
+        "impact_trace_demo/metric_profit_margin@v2"
+      ],
+      [
+        "impact_trace_demo/field_revenue_2025@v2",
+        "impact_trace_demo/metric_revenue_growth@v2",
+        "impact_trace_demo/claim_financial_growth@v2",
+        "impact_trace_demo/claim_report_financial_section@v2",
+        "impact_trace_demo/report_merged@v2"
+      ]
+    ]
+  },
+  "traceDiff": {
+    "schemaVersion": "1.0",
+    "usageType": "SYNTHETIC",
+    "full": {
+      "strategy": "FULL_RERUN",
+      "planSteps": 22,
+      "taskCalls": 14,
+      "llmCalls": 6,
+      "tokens": 899,
+      "recomputedArtifacts": 23,
+      "reusedArtifacts": 0,
+      "residualContamination": 0,
+      "outputEquivalent": true
+    },
+    "selective": {
+      "strategy": "SELECTIVE_RECOVERY",
+      "planSteps": 7,
+      "taskCalls": 7,
+      "llmCalls": 2,
+      "tokens": 318,
+      "recomputedArtifacts": 7,
+      "reusedArtifacts": 4,
+      "residualContamination": 0,
+      "outputEquivalent": true
+    },
+    "reductions": {
+      "planSteps": 0.681818,
+      "taskCalls": 0.5,
+      "llmCalls": 0.666667,
+      "tokens": 0.646274
+    },
+    "sameRecoveredOutput": true
+  }
+}

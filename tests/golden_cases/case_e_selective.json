@@ -1,0 +1,1 @@
+{"case_id":"CASE_E","contamination_type":"combined","variant":"selective","input":{"total_nodes":10,"invalidated_nodes":["field_combo","evidence_combo"],"contaminated_nodes":[]},"expected":{"strategy":"SELECTIVE_RECOVERY","affected_nodes":["field_combo","evidence_combo"],"minimum_reduction":0.8}}

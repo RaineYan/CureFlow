@@ -1,0 +1,17 @@
+.trace-diff { margin-top: 18px; }
+.trace-note { color: #82998e; font-size: 11px; }
+.trace-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.trace-columns article { display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1px solid #29473a; border-radius: 12px; background: #0b1d15; }
+.trace-columns article.recommended { border-color: #64f0ac; background: linear-gradient(145deg, #173b2a, #0b2118); }
+.trace-columns small, .trace-columns span { color: #8ca197; font-size: 10px; }
+.trace-columns b { font-size: 28px; }
+.trace-columns b em { color: #8ca197; font-size: 11px; }
+.trace-summary { display: flex; gap: 12px; margin-top: 12px; }
+.trace-summary > span { flex: 1; padding: 12px; border-radius: 9px; background: #10251c; color: #91a69c; font-size: 11px; }
+.trace-summary b { color: #64f0ac; }
+.execution-comparison { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 12px; padding: 14px 16px; border: 1px solid #29473a; border-radius: 10px; background: #0b1d15; color: #a9bbb2; }
+.execution-comparison b { width: 100%; color: #e8fff3; }
+@media (max-width: 850px) {
+  .trace-columns { grid-template-columns: 1fr; }
+  .trace-summary { flex-direction: column; }
+}

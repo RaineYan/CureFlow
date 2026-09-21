@@ -1,0 +1,1 @@
+{"case_id":"CASE_E","contamination_type":"combined","variant":"coarse","input":{"total_nodes":10,"invalidated_nodes":["field_combo","evidence_combo"],"contaminated_nodes":["metric_combo","claim_combo","report"]},"expected":{"strategy":"COARSE_CHECKPOINT","affected_nodes":["field_combo","evidence_combo","metric_combo","claim_combo","report"],"minimum_reduction":0.5}}

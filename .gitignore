@@ -1,0 +1,83 @@
+# Python 缓存、虚拟环境与测试产物
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+
+# Node / Electron 构建与安装产物
+node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/build/
+desktop/release/
+desktop/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.blockmap
+
+# CureFlow 本地运行数据与可再生成的基准数据
+.cureflow-desktop-data/
+.perf_test_data/
+.threshold_test_data/
+artifact_data/
+packaged-smoke-data*/
+
+# 临时文件、日志和废弃工作区
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.pid
+poc_trash/
+/_m3b_recon.py
+/_m3b_recon_stderr.txt
+/_day13_5_run_user_side.ps1
+
+# 本地 AI 调用审计与内部协作记录（可能包含私有 request ID）
+artifacts/openai*
+artifacts/collaboration/
+**/openai_live_audit/
+experiments/results/
+
+# AI 协作交接材料保留在本机，不作为产品源码发布
+/HANDOFF_TO_CODEX.md
+/_HANDOVER.md
+/_CODEX_PROMPT.md
+/MAVIS_CODEX_INTEGRATED_REPORT.md
+
+# 与 CureFlow 无关的大体积本地媒体素材
+assets/video/
+
+# 密钥、凭据与本机配置
+.env
+.env.*
+!.env.example
+.npmrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+credentials.json
+secrets.json
+*_credentials.json
+*_secrets.json
+config.local.*
+
+# 编辑器和操作系统文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

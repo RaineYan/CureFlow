@@ -1,0 +1,1 @@
+{"case_id":"CASE_B","contamination_type":"agent_error","variant":"coarse","input":{"total_nodes":10,"invalidated_nodes":["claim_agent"],"contaminated_nodes":["section_agent","report","audit","export"]},"expected":{"strategy":"COARSE_CHECKPOINT","affected_nodes":["claim_agent","section_agent","report","audit","export"],"minimum_reduction":0.5}}
