@@ -1,0 +1,162 @@
+/* CureFlow workspace redesign. Keep the existing brand, give each task one
+   primary action, and let evidence and advanced methods remain available. */
+:root {
+  --workspace-line: rgba(132, 165, 194, .23);
+  --workspace-quiet: #a9bfd2;
+  --workspace-focus: #80e4d4;
+}
+
+.shell main { min-width: 0; }
+.shell main > header { align-items: flex-start; gap: 24px; padding-bottom: 20px; }
+.shell main > header h1 { line-height: 1.12; }
+.view-description { max-width: 62ch; font-size: max(15px, 1rem); line-height: 1.65; }
+.header-controls { gap: 8px; }
+.header-provider-action { display: none; }
+
+.sidebar { box-shadow: none; border-right: 1px solid var(--workspace-line); }
+.sidebar nav { margin-top: 22px; }
+.sidebar nav button { min-height: 44px; }
+.sidebar nav button > b { font-size: 14px; }
+.sidebar-home { width: 100%; }
+.sidebar-secondary { margin-top: 14px; border-top: 1px solid var(--workspace-line); }
+.sidebar-secondary > summary { padding: 15px 8px 8px; color: #acc6d8; font-size: 13px; font-weight: 650; cursor: pointer; list-style: none; }
+.sidebar-secondary > summary::-webkit-details-marker { display: none; }
+.sidebar-secondary > summary::before { content: "▸"; display: inline-block; width: 18px; color: #81d6ca; transition: transform .16s; }
+.sidebar-secondary[open] > summary::before { transform: rotate(90deg); }
+.sidebar-secondary button { width: 100%; }
+.sidebar-settings { display: grid; gap: 4px; width: 100%; min-height: 55px; margin-top: 16px; padding: 11px 13px; border: 1px solid var(--workspace-line); border-radius: 9px; background: rgba(30, 61, 83, .2); color: #e9f5ff; text-align: left; cursor: pointer; }
+.sidebar-settings b { font-size: 14px; }
+.sidebar-settings small { color: #a8c3d4; font-size: 12px; }
+.sidebar-settings:hover { border-color: var(--workspace-focus); }
+.sidebar-history summary { min-height: 42px; font-size: 14px; }
+.sidebar-history-list button { min-height: 50px; }
+.sidebar-history-list button b { font-size: 13px; }
+.sidebar-history-list button small,
+.sidebar-history > p,
+.local-badge small { font-size: 12px; line-height: 1.45; }
+
+.incident-flow-panel { margin: 0 0 24px; padding: 0 0 16px; border-bottom: 1px solid var(--workspace-line); }
+.view-workspace .incident-flow-heading { display: flex; }
+.incident-flow-heading h2 { font-size: 15px; }
+.incident-flow-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }
+.incident-flow-step,
+.view-workspace .incident-flow-step {
+  flex: 0 1 auto;
+  display: inline-flex;
+  min-height: 39px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--workspace-quiet);
+}
+.incident-flow-step.active,
+.incident-flow-step:hover { border-color: rgba(94, 190, 199, .5); background: rgba(43, 97, 128, .2); }
+.incident-flow-step strong { font-size: 13px; }
+.incident-flow-number { font-size: 11px; }
+.incident-flow-panel > p { max-width: 80ch; margin-top: 10px; font-size: 12px; line-height: 1.5; }
+.task-next-action { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.task-next-action p { margin: 0; color: #dbeaf5; font-size: 15px; line-height: 1.5; }
+.task-next-action button { min-height: 40px; padding: 8px 15px; }
+.view-workspace .task-next-action {
+  margin: 0 0 18px;
+  padding: 18px 22px;
+  border-left: 3px solid var(--workspace-focus);
+  border-radius: 0 10px 10px 0;
+  background: rgba(33, 78, 104, .23);
+}
+.task-next-action > div { flex: 1 1 320px; min-width: 0; }
+.task-next-action small { color: var(--workspace-focus); font-size: 12px; font-weight: 700; }
+.task-next-action h2 { margin: 5px 0 6px; color: #f1f8ff; font-size: 20px; }
+.task-next-action p { max-width: 76ch; color: #b9cfdf; font-size: 14px; }
+
+.view-workspace .hero-grid { gap: 20px; }
+.view-workspace .upload-panel { padding: 22px 26px; background: #0d1c32; border-color: var(--workspace-line); }
+.view-workspace .upload-panel .panel-head h2 { font-size: 22px; }
+.view-workspace .dropzone,
+.view-workspace .dropzone.has-file { min-height: 96px; height: auto; padding: 18px; }
+.dropzone b { font-size: 17px; }
+.dropzone span,
+.upload-note,
+.inspection-note { font-size: 13px; line-height: 1.55; }
+.analysis-goal-picker > span { font-size: 16px; }
+.analysis-goal-help summary,
+.analysis-goal-help p,
+.field-settings summary,
+.column-preview-details summary { font-size: 13px; }
+.analysis-role-picker label > span,
+.analysis-role-picker select { font-size: 14px; }
+.inspection-summary span,
+.inspection-summary > strong { font-size: 14px; }
+.view-workspace .actions { gap: 10px; }
+.view-workspace .actions .primary { min-height: 46px; }
+.view-workspace .actions .secondary { min-height: 46px; }
+.provider-inline { margin-bottom: 20px; padding: 10px 0; }
+.provider-inline h2,
+.provider-inline p,
+.provider-inline .change-engine,
+.provider-inline .provider-blocked,
+.provider-inline .provider-options,
+.provider-inline .provider-options p { font-size: 13px; }
+
+.analysis-overview,
+.result-source-binding { border-color: var(--workspace-line); }
+.analysis-overview .overview-state > p,
+.analysis-overview .mock-note,
+.result-source-binding span { font-size: 14px; line-height: 1.6; }
+.advanced-analysis { border-color: var(--workspace-line); background: rgba(12, 29, 51, .45); }
+.advanced-analysis > summary { font-size: 16px; }
+.advanced-analysis > summary span { font-size: 13px; line-height: 1.5; }
+
+.review-dialog { width: min(1050px, 100%); }
+.review-dialog header p { max-width: 75ch; font-size: 14px; }
+.review-list { gap: 0; padding-right: 0; border-top: 1px solid var(--workspace-line); }
+.review-list .review-row { min-width: 0; border: 0; border-bottom: 1px solid var(--workspace-line); background: transparent; }
+.review-list .review-row:hover,
+.review-list .review-row[open] { background: rgba(68, 126, 164, .1); }
+.review-row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 20px; padding: 16px 12px; list-style: none; cursor: pointer; }
+.review-row > summary::-webkit-details-marker { display: none; }
+.review-row > summary::after { content: "展开复核"; grid-column: 2; color: #8ce1d3; font-size: 12px; }
+.review-row[open] > summary::after { content: "收起"; }
+.review-row > :not(summary) { margin-left: 12px; margin-right: 12px; }
+.review-issue-title { display: grid; gap: 4px; }
+.review-issue-title small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: #a9c6d8; font-size: 13px; font-weight: 400; line-height: 1.45; }
+.review-row .review-issue-head > span:not(.review-issue-title) { grid-column: 2; grid-row: 1; color: #9cc4db; font-size: 13px; text-align: right; }
+.review-list .review-reason { max-width: 76ch; font-size: 14px; line-height: 1.55; }
+.review-issue-head { gap: 10px; }
+.review-issue-head strong { font-size: 16px; }
+.review-values,
+.review-valid,
+.review-entry,
+.review-check { font-size: 14px; }
+
+button:focus-visible,
+summary:focus-visible,
+select:focus-visible,
+input:focus-visible { outline: 2px solid var(--workspace-focus); outline-offset: 3px; }
+
+@media (max-width: 850px) {
+  .shell main > header { flex-direction: column; }
+  .incident-flow-steps { display: flex; }
+  .incident-flow-step,
+  .view-workspace .incident-flow-step { justify-content: flex-start; }
+  .incident-flow-step .incident-flow-number { display: inline; }
+  .view-workspace .upload-panel { padding: 18px; }
+}
+
+@media (max-width: 520px) {
+  .task-next-action { align-items: stretch; }
+  .task-next-action button { width: 100%; }
+  .incident-flow-step,
+  .view-workspace .incident-flow-step { flex: 1 1 calc(50% - 6px); }
+  .view-workspace .actions > button { width: 100%; }
+  .review-row > summary { grid-template-columns: 1fr; }
+  .review-row .review-issue-head > span:not(.review-issue-title),
+  .review-row > summary::after { grid-column: 1; grid-row: auto; text-align: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell button,
+  .shell summary { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}

@@ -17,6 +17,15 @@ from .openai_responses import OpenAIResponsesClient, OpenAIResponsesConfig
 
 
 class ProviderMode(str, Enum):
+    """Low-level offline/OpenAI selector used by ``build_llm_client``.
+
+    The desktop's full provider list lives in
+    ``cureflow_app.provider_runtime.DesktopProviderRuntime``. Its
+    ``resolve`` gate routes OpenAI through this selector, Qwen and
+    DeepSeek through ``RealLLMClient``, and Doubao through
+    ``DoubaoClient`` (a ``RealLLMClient`` subclass). Do not use this
+    enum as the desktop provider catalog.
+    """
     OFFLINE = "offline"
     OPENAI_RESPONSES = "openai_responses"
 
@@ -42,4 +51,3 @@ def build_llm_client(
             "OpenAI live mode requires explicit allow_live=True"
         )
     return OpenAIResponsesClient(resolved.openai or OpenAIResponsesConfig())
-

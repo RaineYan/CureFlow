@@ -30,6 +30,28 @@ ISSUE_IMPACT = {
 }
 
 
+def impacted_tool_keys_for_issue_types(
+    issue_types: set[str], available_keys: list[str],
+) -> tuple[list[str], bool]:
+    """Map issue types to actually executed tools, conservatively.
+
+    Unknown issue types invalidate every available tool.  Keeping this logic
+    in one function lets the recovery plan and the user-facing impact graph
+    share the same decision instead of drifting apart.
+    """
+    impacted: set[str] = set()
+    unknown_issue = False
+    for issue_type in issue_types:
+        mapped = ISSUE_IMPACT.get(issue_type)
+        if mapped is None:
+            unknown_issue = True
+        else:
+            impacted.update(mapped)
+    if unknown_issue:
+        impacted.update(available_keys)
+    return [key for key in available_keys if key in impacted], unknown_issue
+
+
 def build_current_recovery_plan(
     repair_plan: dict[str, Any],
     analysis_tools: dict[str, Any],
@@ -40,25 +62,21 @@ def build_current_recovery_plan(
 ) -> dict[str, Any]:
     """Return a conservative, current-input-bound invalidation plan."""
     issues = list(repair_plan.get("issues") or [])
+    repair_summary = repair_plan.get("summary") or {}
+    total_issues = int(repair_summary.get("issueCount", len(issues)))
+    # The response only includes a page of cells. Impact must include every
+    # observed issue type, including types beyond the first 250 entries.
+    all_issue_types = set(repair_summary.get("byType") or {}) or {issue.get("type") for issue in issues}
     tool_entries = {
         item.get("key"): item
         for item in analysis_tools.get("executedTools", [])
         if item.get("key")
     }
     available_keys = [key for key in ALL_TOOL_KEYS if key in tool_entries]
-    impacted: set[str] = set()
-    unknown_issue = False
-    for issue in issues:
-        issue_type = issue.get("type")
-        mapped = ISSUE_IMPACT.get(issue_type)
-        if mapped is None:
-            unknown_issue = True
-        else:
-            impacted.update(mapped)
-    if unknown_issue:
-        impacted.update(available_keys)
-    impacted_keys = [key for key in available_keys if key in impacted]
-    reusable_keys = [key for key in available_keys if key not in impacted]
+    impacted_keys, unknown_issue = impacted_tool_keys_for_issue_types(
+        {str(item) for item in all_issue_types if item}, available_keys,
+    )
+    reusable_keys = [key for key in available_keys if key not in impacted_keys]
 
     # Provider interpretation and report depend on every displayed local tool
     # result.  They are therefore regenerated whenever a source correction
@@ -68,16 +86,16 @@ def build_current_recovery_plan(
     selective_steps = len(impacted_keys) + downstream_steps
     reusable_steps = max(full_steps - selective_steps, 0)
     reduction = round((1 - selective_steps / full_steps) * 100, 2) if full_steps and selective_steps else 0.0
-    safe_count = int((repair_plan.get("summary") or {}).get("safeFixCount", 0))
-    review_count = int((repair_plan.get("summary") or {}).get("reviewCount", 0))
-    if not issues:
+    safe_count = int(repair_summary.get("safeFixCount", 0))
+    review_count = int(repair_summary.get("reviewCount", 0))
+    if not total_issues:
         status = "no_recovery_needed"
         headline = "当前规则没有发现需要恢复的数据问题"
         next_action = "如需更深入分析，请指定目标字段、时间字段或分组字段。"
     elif review_count:
         status = "review_required"
-        headline = f"本次文件有 {review_count} 项需要先人工核对"
-        next_action = "先回到诊断工作台核对具体单元格；确认原值需要修改后，再生成修正版并重新分析。"
+        headline = f"本次文件有 {review_count} 条待核对线索，并非已确认错误"
+        next_action = "打开人工复核窗口查看工作表、单元格、原值和疑点；确认原值需要修改后，再生成修正版并重新分析。"
     else:
         status = "safe_fixes_available"
         headline = f"本次文件有 {safe_count} 项安全修正可以生成副本"
@@ -102,9 +120,12 @@ def build_current_recovery_plan(
         "headline": headline,
         "nextAction": next_action,
         "summary": {
-            "issueCount": len(issues),
+            "issueCount": total_issues,
+            "shownIssueCount": len(issues),
             "safeFixCount": safe_count,
             "reviewCount": review_count,
+            "byType": repair_summary.get("byType", {}),
+            "byColumn": repair_summary.get("byColumn", {}),
             "impactedToolCount": len(impacted_keys),
             "reusableToolCount": len(reusable_keys),
             "fullRecomputeSteps": full_steps,

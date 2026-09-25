@@ -16,6 +16,10 @@ from typing import Any, Iterable
 
 
 MAX_REPAIR_ISSUES = 250
+# These are conservative product guards, not universal statistical cutoffs.
+MIN_IQR_VALUES = 30
+MIN_IQR_DISTINCT = 8
+MAX_IQR_EXTREME_RATE = 0.03
 FORMULA_ERRORS = {"#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!"}
 MANUAL_REPLACEABLE_TYPES = {
     "formula_error",
@@ -68,6 +72,60 @@ def _is_count(header: str) -> bool:
     return any(token in normalized for token in ("总人数", "人数", "数量", "count"))
 
 
+def is_derived_rate(header: str) -> bool:
+    """A rate needs its numerator, denominator and comparison basis to be audited."""
+    normalized = _normalized_header(header)
+    return any(token in normalized for token in (
+        "率", "百分比", "占比", "比率", "涨幅", "跌幅", "增长比",
+        "rate", "ratio", "growthpct", "growthpercent", "percentchange",
+    ))
+
+
+def _is_time(header: str) -> bool:
+    normalized = _normalized_header(header)
+    if any(token in normalized for token in ("时间", "日期", "时刻")):
+        return True
+    return normalized in {"time", "date", "timestamp", "datetime"} or normalized.endswith((
+        "timestamp", "datetime", "eventtime", "sampletime", "recordtime",
+        "measurementtime", "observationtime", "eventdate", "recorddate",
+    ))
+
+
+def _is_group(header: str) -> bool:
+    normalized = _normalized_header(header)
+    return any(token in normalized for token in (
+        "分组", "组别", "阶段", "数据集", "工况", "批次", "类别", "场景",
+        "group", "cohort", "phase", "batch", "class",
+    ))
+
+
+def _structured_baseline(
+    headers: list[str], rows: list[dict[str, str]],
+    analysis_config: dict[str, Any] | None = None,
+) -> str | None:
+    """Find an explicit reason not to compare every row with one global fence."""
+    if len(rows) < MIN_IQR_VALUES:
+        return None
+    roles = analysis_config if isinstance(analysis_config, dict) else {}
+    for role, label in (("timeColumn", "时间"), ("groupColumn", "分组")):
+        chosen = roles.get(role)
+        if isinstance(chosen, str) and chosen in headers:
+            return f"本次已指定{label}字段“{chosen}”，不能把不同{label}位置混在一个全列 IQR 阈值中"
+    for header in headers:
+        if not (_is_time(header) or _is_group(header)):
+            continue
+        nonempty = [str(row.get(header, "") or "").strip() for row in rows]
+        nonempty = [value for value in nonempty if value]
+        if len(nonempty) < 0.8 * len(rows):
+            continue
+        distinct = len(set(nonempty))
+        if _is_time(header) and distinct >= min(10, len(rows) // 2):
+            return f"存在时间字段“{header}”，全列阈值可能把正常的阶段变化误判为异常"
+        if _is_group(header) and 2 <= distinct <= min(20, max(2, len(rows) // 5)):
+            return f"存在分组字段“{header}”，应先按组比较，不能混用一个全列阈值"
+    return None
+
+
 def _quantile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     position = (len(ordered) - 1) * fraction
@@ -116,7 +174,15 @@ def build_repair_plan(
     filename: str,
     sheet: str | None = None,
     source_row_numbers: Iterable[int] | None = None,
+    analysis_config: dict[str, Any] | None = None,
+    issue_offset: int = 0,
+    issue_limit: int = MAX_REPAIR_ISSUES,
+    issue_type_filter: str | None = None,
+    column_filter: str | None = None,
+    include_issue_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
+    if issue_offset < 0 or not 1 <= issue_limit <= MAX_REPAIR_ISSUES:
+        raise ValueError("问题分页范围无效")
     reader = csv.DictReader(StringIO(csv_text))
     headers = list(reader.fieldnames or [])
     rows = list(reader)
@@ -127,13 +193,18 @@ def build_repair_plan(
     review_count = 0
     affected_rows: set[int] = set()
     issues: list[dict[str, Any]] = []
+    counts_by_type: dict[str, int] = defaultdict(int)
+    counts_by_column: dict[str, int] = defaultdict(int)
+    iqr_screening: list[dict[str, Any]] = []
+    matching_issue_count = 0
+    requested_ids = {str(item) for item in include_issue_ids}
 
     def add_issue(
         *, issue_type: str, title: str, row_index: int, column: str,
         original: str, proposed: str | None, severity: str,
         auto_applicable: bool, reason: str, evidence: dict[str, Any] | None = None,
     ) -> None:
-        nonlocal issue_count, safe_fix_count, review_count
+        nonlocal issue_count, safe_fix_count, review_count, matching_issue_count
         source_row = row_numbers[row_index]
         column_index = headers.index(column)
         cell = f"{_column_letter(column_index)}{source_row}"
@@ -141,10 +212,17 @@ def build_repair_plan(
         safe_fix_count += int(auto_applicable)
         review_count += int(not auto_applicable)
         affected_rows.add(source_row)
-        if len(issues) >= MAX_REPAIR_ISSUES:
+        counts_by_type[issue_type] += 1
+        counts_by_column[column] += 1
+        issue_id = _issue_id(issue_type, sheet, cell, original)
+        matches = (not issue_type_filter or issue_type == issue_type_filter) and (not column_filter or column == column_filter)
+        if matches:
+            matching_issue_count += 1
+        on_page = matches and issue_offset <= matching_issue_count - 1 < issue_offset + issue_limit
+        if not on_page and issue_id not in requested_ids:
             return
         issues.append({
-            "id": _issue_id(issue_type, sheet, cell, original),
+            "id": issue_id,
             "type": issue_type,
             "title": title,
             "severity": severity,
@@ -238,32 +316,62 @@ def build_repair_plan(
                     evidence={"totalColumn": total_header, "totalValue": total},
                 )
 
+    structured_baseline = _structured_baseline(headers, rows, analysis_config)
     for header in headers:
-        if _is_identifier(header) or _is_rank(header) or _is_count(header):
-            continue
         numeric = [
             (index, parsed)
             for index, row in enumerate(rows)
             if (parsed := _number(str(row.get(header, "")).strip())) is not None
         ]
-        if len(numeric) < 8:
+        if not numeric:
+            continue
+        assessment: dict[str, Any] = {"column": header, "validCount": len(numeric), "method": "IQR_3.0"}
+
+        def skip_iqr(reason: str) -> None:
+            iqr_screening.append({**assessment, "status": "skipped", "reason": reason, "candidateCount": 0})
+
+        if _is_identifier(header) or _is_rank(header) or _is_count(header) or _is_time(header) or _is_group(header):
+            skip_iqr("该列是标识、排名、计数、时间或分组字段，不适合按连续测量值套用 IQR。")
+            continue
+        if is_derived_rate(header):
+            skip_iqr("这是比率或变化率；离群数值不能说明计算错误。需先核对分子、分母、基准期与公式口径，本次不生成逐格 IQR 复核项。")
+            continue
+        if len(numeric) < MIN_IQR_VALUES:
+            skip_iqr(f"只有 {len(numeric)} 个有效数值，未达到本产品 {MIN_IQR_VALUES} 个的保守筛查门槛。")
+            continue
+        if len({value for _, value in numeric}) < MIN_IQR_DISTINCT:
+            skip_iqr("不同数值过少，更像等级或离散编码，IQR 不能可靠解释其含义。")
+            continue
+        if structured_baseline:
+            skip_iqr(structured_baseline)
             continue
         values = [value for _, value in numeric]
-        q1, q3 = _quantile(values, 0.25), _quantile(values, 0.75)
+        q1, median, q3 = (_quantile(values, fraction) for fraction in (0.25, 0.5, 0.75))
         iqr = q3 - q1
         if iqr <= 0:
+            skip_iqr("中间一半数值没有可用的跨度，无法建立 IQR 筛查界限。")
             continue
-        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-        for row_index, value in numeric:
-            if value < lower or value > upper:
-                add_issue(
-                    issue_type="statistical_outlier", title="IQR 统计异常值",
-                    row_index=row_index, column=header,
-                    original=str(rows[row_index].get(header, "")), proposed=None,
-                    severity="medium", auto_applicable=False,
-                    reason="统计异常不等于数据错误，只作为人工复核线索，不自动删除或改值。",
-                    evidence={"lowerBound": lower, "upperBound": upper, "method": "IQR_1.5"},
-                )
+        left, right = median - q1, q3 - median
+        if min(left, right) <= 0 or max(left, right) / min(left, right) > 3:
+            skip_iqr("分布明显偏斜，固定 IQR 界限容易把正常长尾误当成异常；请结合业务分布核对。")
+            continue
+        # Mild 1.5×IQR points are not used. Even 3×IQR extreme points belong
+        # only in exploratory profiling, not a cell-correction queue.
+        lower, upper = q1 - 3 * iqr, q3 + 3 * iqr
+        flagged = [(row_index, value) for row_index, value in numeric if value < lower or value > upper]
+        if len(flagged) >= 5 and len(flagged) / len(values) > MAX_IQR_EXTREME_RATE:
+            skip_iqr(
+                f"全列有 {len(flagged)} / {len(values)} 个值越过极端界限，"
+                "集中出现的偏离可能是混合分布或真实工况，不应生成逐格‘错误’队列。"
+            )
+            continue
+        iqr_screening.append({
+            **assessment, "status": "applied", "candidateCount": len(flagged),
+            "reason": "数值量、离散程度和分布形状通过保守检查；越过 3×IQR 界限的值仅作为分布探索线索，不是修正问题。",
+            "lowerBound": lower, "upperBound": upper,
+        })
+        # Distribution candidates are exploratory evidence, not repairable
+        # defects. Keep the assessment for charts, never add cell-repair issues.
 
     return {
         "version": "repair_plan_v1",
@@ -280,6 +388,10 @@ def build_repair_plan(
             "affectedRows": len(affected_rows),
             "shownIssueCount": len(issues),
             "truncated": issue_count > len(issues),
+            "matchingIssueCount": matching_issue_count,
+            "iqrScreening": iqr_screening,
+            "byType": dict(sorted(counts_by_type.items(), key=lambda entry: (-entry[1], entry[0]))),
+            "byColumn": dict(sorted(counts_by_column.items(), key=lambda entry: (-entry[1], entry[0]))),
         },
         "issues": issues,
         "policy": {

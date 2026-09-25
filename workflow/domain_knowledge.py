@@ -25,6 +25,12 @@ SOURCES: dict[str, dict[str, Any]] = {
         "year": 2012,
         "url": "https://www.itl.nist.gov/div898/handbook/toolaids/pff/E-Handbook.pdf",
     },
+    "nist_boxplot": {
+        "title": "NIST/SEMATECH e-Handbook: Box Plot and Outlier Fences",
+        "organization": "NIST",
+        "year": 2012,
+        "url": "https://itl.nist.gov/div898/handbook/eda/section3/boxplot.htm",
+    },
     "oecd_quality": {
         "title": "OECD Recommendation on Good Statistical Practice",
         "organization": "OECD",
@@ -199,7 +205,7 @@ METHOD_CARDS = (
     _card("quality_dimensions", "general", "统计质量六维检查", "任何数据集进入分析前", "按相关性、准确性、可信度、及时性、可比性和可解释性分开评价。", ["明确数据口径与采集范围"], ["完整率高就等于数据真实", "单一质量分数替代逐维检查"], ["字段定义", "缺失与重复", "时间覆盖", "跨表口径"], ["oecd_quality"]),
     _card("missing_mechanism", "general", "缺失机制分层", "字段存在缺失值", "先区分缺失位置与模式，再讨论 MCAR、MAR、MNAR；未满足可忽略条件时不自动插补。", ["保留缺失位置", "至少一个可比较字段"], ["默认把缺失当作零", "未验证即宣称随机缺失"], ["分组缺失率", "时间缺失率", "缺失与已观测字段关系"], ["rubin_missing", "missing_planning"], min_rows=4),
     _card("eda_before_model", "general", "建模前探索性分析", "未知表格或新任务", "先看分布、尺度、结构、异常线索和数据生成过程，再选择模型。", ["字段类型可识别"], ["只凭均值判断整体", "先选模型再寻找解释"], ["分布", "尺度", "分组", "时间", "异常位置"], ["nist_eda"], min_rows=4),
-    _card("outlier_review", "general", "异常值审慎处理", "数值字段出现极端值", "异常值先定位并核对成因；仅在业务或采集证据支持时修正，不能因为偏离分布就删除。", ["原始位置可定位"], ["IQR 标记等于错误", "自动删除所有极端值"], ["录入错误", "单位变化", "真实稀有事件", "敏感性分析"], ["nist_eda", "fpp3"], min_rows=4),
+    _card("outlier_review", "general", "异常值审慎处理", "连续数值列具有单一、可比较的分布基线时", "先判断样本量、离散度、偏斜、分组和时间结构；1.5×IQR 仅作探索提示，修正队列只纳入经适用性检查后越过 3×IQR 的极端值，仍须核对来源。", ["至少 30 个有效数值", "原始位置可定位", "分组和时间背景已检查"], ["IQR 标记等于错误", "跳过 IQR 就代表数据正常", "自动删除所有极端值"], ["录入错误", "单位变化", "真实稀有事件", "敏感性分析"], ["nist_eda", "nist_boxplot", "fpp3"], min_rows=30),
     _card("uncertainty_bounds", "general", "不确定性与覆盖率", "输出预测区间或风险阈值", "优先报告区间、覆盖假设和失效条件；具备校准集时可考虑保序预测。", ["独立校准数据或可辩护的交换性假设"], ["点预测等于确定事实", "未校准就承诺覆盖率"], ["校准集隔离", "覆盖率", "分布漂移"], ["conformal"], min_rows=20),
     _card("causal_gate", "general", "因果结论准入门槛", "用户询问影响、效果或原因", "先明确处理、结果、反事实和识别策略；描述性相关只能形成假设。", ["处理与结果定义", "可辩护识别策略"], ["相关性写成因果", "分组均值差直接写成效果"], ["混杂", "选择偏差", "平行趋势或随机化", "稳健性"], ["world_bank_ie"]),
 
@@ -285,7 +291,7 @@ TASK_CARD_PRIORITY = {
     "descriptive_profile": ["eda_before_model", "effect_size", "bootstrap_uncertainty", "learning_profile", "business_kpi", "economic_trend", "spc_control_charts"],
     "group_comparison": ["effect_size", "multiple_testing", "bootstrap_uncertainty", "education_fairness", "education_indicator_comparability", "distributional_effects"],
     "relationship_review": ["causal_gate", "model_explanation", "root_cause_gate", "business_kpi", "pricing_elasticity", "panel_fixed_effects"],
-    "trend_forecast": ["validation_leakage", "uncertainty_bounds", "business_forecast", "industrial_change_point", "industrial_drift", "education_longitudinal", "economic_nowcast"],
+    "trend_forecast": ["business_forecast", "industrial_change_point", "industrial_drift", "education_longitudinal", "economic_nowcast", "validation_leakage", "uncertainty_bounds"],
     "causal_evaluation": ["causal_gate", "online_experiment", "education_intervention", "industrial_doe", "economic_impact", "difference_in_differences", "regression_discontinuity", "instrumental_variables"],
 }
 
@@ -294,9 +300,25 @@ def _normalize(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "").strip().lower())
 
 
+_CORE_METHOD_IDS = (
+    "quality_dimensions", "missing_mechanism", "eda_before_model",
+    "outlier_review", "causal_gate", "llm_spreadsheet_guard",
+)
+
+# A local calculation can cover only part of a broader literature card.  These
+# notes deliberately do not call the entire card or its cited paper "executed".
+_PARTIAL_APPLICATION_NOTES = {
+    "quality_dimensions": "已检查缺失、重复与分类频数；其他统计质量维度仍需核对口径和来源。",
+    "eda_before_model": "已计算数值分布；尚未建立或验证预测模型。",
+    "outlier_review": "已按适用性条件运行 IQR 探索；极端值仍不是已确认错误。",
+    "effect_size": "已计算分组均值差；尚未给出不确定性区间或业务重要性阈值。",
+}
+
+
 def select_method_pack(
     columns: Iterable[Any], *, goal: str = "auto", row_count: int = 0,
     analysis_config: dict[str, Any] | None = None, max_cards: int = 9,
+    analysis_tools: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Select a compact, deterministic method pack for one uploaded table."""
     column_names = [str(column) for column in columns]
@@ -319,23 +341,39 @@ def select_method_pack(
     else:
         reasons.append("未识别到可靠领域信号，仅启用通用方法；不会猜测业务背景")
 
-    # Keep the prompt compact: a stable general guard set plus the most relevant
-    # domain cards.  The full registry remains available for later retrieval.
-    general_ids = {
-        "quality_dimensions", "missing_mechanism", "eda_before_model",
-        "outlier_review", "causal_gate", "llm_spreadsheet_guard",
-    }
-    candidates = [card for card in METHOD_CARDS if card["id"] in general_ids]
-    for domain in selected_domains:
-        candidates.extend(card for card in METHOD_CARDS if card["domain"] == domain)
+    # All general cards must be eligible: task priorities previously named
+    # seven cards that the six-card allowlist silently made unreachable.
+    candidates = [
+        card for card in METHOD_CARDS
+        if card["domain"] == "general" or card["domain"] in selected_domains
+    ]
     priority = TASK_CARD_PRIORITY.get(goal, [])
     if priority:
         order = {card_id: index for index, card_id in enumerate(priority)}
-        candidates.sort(key=lambda card: (order.get(card["id"], len(order)), card["domain"] != "general"))
+        candidates.sort(key=lambda card: (
+            0 if card["id"] in order else 1 if card["id"] in _CORE_METHOD_IDS else 2 if card["domain"] != "general" else 3,
+            order.get(card["id"], len(order)),
+        ))
         reasons.append(f"按本次问题类型“{goal}”优先检索 {len(priority)} 类方法")
+    else:
+        candidates.sort(key=lambda card: (
+            0 if card["id"] in _CORE_METHOD_IDS else 1 if card["domain"] != "general" else 2,
+        ))
     candidates = candidates[:max_cards]
 
     config = analysis_config or {}
+    actual_decisions = {
+        card_id: decision
+        for decision in (analysis_tools or {}).get("analysisProcess", {}).get("methodDecisions", [])
+        for card_id in decision.get("methodCardIds", [])
+        if isinstance(card_id, str)
+    }
+    actual_evidence_refs = {
+        tool["evidenceRef"]
+        for tool in (analysis_tools or {}).get("executedTools", [])
+        if tool.get("status") == "success"
+        and isinstance(tool.get("evidenceRef"), str) and bool(tool["evidenceRef"])
+    }
     selected_cards: list[dict[str, Any]] = []
     source_ids: set[str] = set()
     for card in candidates:
@@ -359,7 +397,18 @@ def select_method_pack(
             f"最低条件：{'；'.join(card['minimumRequirements'])}｜"
             f"必须核对：{'；'.join(card['requiredChecks'])}"
         )
-        public_card.update({"readiness": readiness, "readinessNote": readiness_note})
+        decision = actual_decisions.get(card["id"])
+        applied = (
+            readiness == "method_reference" and decision is not None
+            and decision.get("status") == "executed"
+            and decision.get("evidenceRef") in actual_evidence_refs
+        )
+        public_card.update({
+            "readiness": readiness, "readinessNote": readiness_note,
+            "applicationStatus": "partial" if applied else "reference_only",
+            "applicationNote": _PARTIAL_APPLICATION_NOTES[card["id"]] if applied else "仅作方法参考；本次没有该卡对应的已验证计算结果。",
+            "executionEvidenceRefs": [decision["evidenceRef"]] if applied else [],
+        })
         selected_cards.append(public_card)
 
     return {
@@ -371,6 +420,7 @@ def select_method_pack(
         "libraryMethodCount": len(METHOD_CARDS),
         "librarySourceCount": len(SOURCES),
         "selectedMethodCount": len(selected_cards),
+        "partiallyAppliedMethodCount": sum(card["applicationStatus"] == "partial" for card in selected_cards),
         "methods": selected_cards,
         "sources": [dict(id=source_id, **SOURCES[source_id]) for source_id in sorted(source_ids)],
         "guardrails": [
@@ -392,7 +442,8 @@ def provider_safe_method_pack(pack: dict[str, Any]) -> dict[str, Any]:
             {key: method[key] for key in (
                 "id", "domain", "title", "useWhen",
                 "minimumRequirements", "blockedClaims", "requiredChecks",
-                "readiness", "readinessNote",
+                "readiness", "readinessNote", "applicationStatus",
+                "applicationNote", "executionEvidenceRefs",
             )} | {"method": method.get("methodCore", method["method"])}
             for method in pack["methods"]
         ],

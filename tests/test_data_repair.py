@@ -36,6 +36,26 @@ def test_repair_plan_locates_safe_whitespace_fix() -> None:
     assert plan["summary"]["safeFixCount"] == 1
 
 
+def test_repair_plan_counts_all_issues_and_pages_beyond_first_250() -> None:
+    source = "编号,备注\n" + "".join(f"R{index}, 值{index} \n" for index in range(270))
+    first = _plan(source)
+    later = _plan(source, issue_offset=250, issue_limit=40)
+    assert first["summary"]["issueCount"] == 270
+    assert first["summary"]["shownIssueCount"] == 250
+    assert first["summary"]["byType"] == {"trim_whitespace": 270}
+    assert first["summary"]["byColumn"] == {"备注": 270}
+    assert later["summary"]["matchingIssueCount"] == 270
+    assert len(later["issues"]) == 20
+    assert later["issues"][0]["location"]["cell"] == "B252"
+
+
+def test_repair_plan_filters_on_full_population_not_only_first_page() -> None:
+    source = "编号,备注\n" + "".join(f"R{index}, 值{index} \n" for index in range(260))
+    plan = _plan(source, issue_offset=250, issue_limit=10, issue_type_filter="trim_whitespace", column_filter="备注")
+    assert [item["location"]["cell"] for item in plan["issues"]] == [f"B{row}" for row in range(252, 262)]
+    assert plan["summary"]["matchingIssueCount"] == 260
+
+
 def test_repair_plan_preserves_real_xlsx_row_numbers() -> None:
     plan = _plan("编号,备注\nA, ok \nB,clean\n", sheet="主表", source_row_numbers=[5, 9])
     issue = next(item for item in plan["issues"] if item["type"] == "trim_whitespace")
@@ -67,14 +87,78 @@ def test_score_and_rank_bounds_are_located() -> None:
     assert all(not item["autoApplicable"] for item in types.values())
 
 
-def test_iqr_outlier_is_a_review_hint_not_a_correction() -> None:
-    values = [10, 10, 11, 11, 12, 12, 13, 100]
+def test_iqr_extreme_is_exploration_only_not_a_repair_issue() -> None:
+    values = [*range(1, 31), 1000]
     csv_text = "样本,测量值\n" + "\n".join(f"S{i},{value}" for i, value in enumerate(values)) + "\n"
     plan = _plan(csv_text)
-    issue = next(item for item in plan["issues"] if item["type"] == "statistical_outlier")
-    assert issue["originalValue"] == "100"
-    assert issue["autoApplicable"] is False
-    assert issue["evidence"]["method"] == "IQR_1.5"
+    assert plan["issues"] == []
+    assert plan["summary"]["issueCount"] == 0
+    screening = next(item for item in plan["summary"]["iqrScreening"] if item["column"] == "测量值")
+    assert screening["status"] == "applied"
+    assert screening["candidateCount"] == 1
+    assert screening["upperBound"] < 1000
+    assert "不是修正问题" in screening["reason"]
+
+
+def test_derived_rate_is_not_iqr_screened_or_queued_for_correction() -> None:
+    values = [round((index % 40 - 20) / 100, 3) for index in range(100)] + [-0.71]
+    csv_text = "学业进步率,实测值\n" + "\n".join(f"{rate},{index + 1}" for index, rate in enumerate(values)) + "\n"
+    plan = _plan(csv_text)
+    rate_screen = next(item for item in plan["summary"]["iqrScreening"] if item["column"] == "学业进步率")
+    assert rate_screen["status"] == "skipped"
+    assert "分子、分母" in rate_screen["reason"]
+    assert not any(item["location"]["column"] == "学业进步率" for item in plan["issues"])
+
+
+def test_iqr_skips_small_or_discrete_numeric_columns() -> None:
+    small = _plan("测量值\n" + "\n".join(str(value) for value in [*range(1, 8), 1000]) + "\n")
+    assert small["summary"]["iqrScreening"][0]["status"] == "skipped"
+    assert "有效数值" in small["summary"]["iqrScreening"][0]["reason"]
+    discrete = _plan("等级\n" + "\n".join(str(value) for value in [1, 2, 3] * 10 + [99]) + "\n")
+    assert not any(item["type"] == "statistical_outlier" for item in discrete["issues"])
+    assert "不同数值过少" in discrete["summary"]["iqrScreening"][0]["reason"]
+
+
+def test_iqr_does_not_mix_explicit_groups_or_time_series() -> None:
+    grouped = "组别,测量值\n" + "\n".join(
+        f"{group},{value}" for group, values in (("A", range(1, 21)), ("B", range(101, 121))) for value in values
+    ) + "\n"
+    plan = _plan(grouped)
+    measure = next(item for item in plan["summary"]["iqrScreening"] if item["column"] == "测量值")
+    assert measure["status"] == "skipped"
+    assert "分组字段" in measure["reason"]
+    assert not any(item["type"] == "statistical_outlier" for item in plan["issues"])
+
+    timed = "时间,测量值\n" + "\n".join(f"T{i},{i if i < 30 else 1000}" for i in range(31)) + "\n"
+    time_plan = _plan(timed)
+    timed_measure = next(item for item in time_plan["summary"]["iqrScreening"] if item["column"] == "测量值")
+    assert timed_measure["status"] == "skipped"
+    assert "时间字段" in timed_measure["reason"]
+
+    selected_group = "性别,测量值\n" + "\n".join(
+        f"{group},{value}" for group, values in (("甲", range(1, 21)), ("乙", range(101, 121))) for value in values
+    ) + "\n"
+    selected_plan = _plan(selected_group, analysis_config={"groupColumn": "性别"})
+    selected_measure = next(item for item in selected_plan["summary"]["iqrScreening"] if item["column"] == "测量值")
+    assert selected_measure["status"] == "skipped"
+    assert "本次已指定分组字段“性别”" in selected_measure["reason"]
+
+
+def test_iqr_skips_mixed_distribution_with_many_extremes() -> None:
+    values = [*range(1, 96), *range(1000, 1010)]
+    plan = _plan("测量值\n" + "\n".join(map(str, values)) + "\n")
+    assessment = plan["summary"]["iqrScreening"][0]
+    assert assessment["status"] == "skipped"
+    assert "集中出现" in assessment["reason"]
+    assert not any(item["type"] == "statistical_outlier" for item in plan["issues"])
+
+
+def test_runtime_duration_is_not_mistaken_for_time_axis() -> None:
+    values = [*range(1, 31), 1000]
+    plan = _plan("runtime\n" + "\n".join(map(str, values)) + "\n")
+    assert plan["summary"]["iqrScreening"][0]["status"] == "applied"
+    assert plan["summary"]["iqrScreening"][0]["candidateCount"] == 1
+    assert not plan["issues"]
 
 
 def test_only_safe_approved_fixes_can_be_applied() -> None:

@@ -2,9 +2,15 @@
 
 > 面向数据分析型多智能体工作流的**语义产物溯源**与**成本约束选择性恢复**系统
 >
-> **2-week POC** · **离线 deterministic fixture** · **本地优先**
+> **Windows 桌面应用** · **本地优先** · **按需连接真实 AI 模型**
 
-CureFlow 是一个多智能体协作系统的中间件层：当一个由多个 AI agent 协作完成的"分析报告"流程中，**某个节点的产出出现错误**（数据腐败 / agent 输出错误 / 证据引用错误），CureFlow 能够：
+CureFlow 的目标是：当数据分析工作流中的数据、AI 结论或证据引用出错时，找出错误来源和受影响的后续结果，只重做受影响的步骤，并验证修正后的结果。当前产品同时提供文件导入、本地数据检查、人工复核、按需 AI 解读和修正版复测；研究性工作流与冻结实验仍保留在同一仓库。
+
+使用者先导入自己的 CSV/XLSX，确认读取范围，再查看本地检查结果；本地检查不需要 API Key。需要 AI 解读时，再选择并验证自己有权使用的模型。统计极端值只是复核线索，不等于数据错误；系统不会凭猜测填补缺失值，也不会覆盖原文件。完整操作、安装包验证状态和隐私边界见 [桌面版使用说明](desktop/README.md)。
+
+Windows 普通用户可安装上一轮验证包 `desktop/release-validation-doubao-model/CureFlow-Setup-0.1.0-x64.exe`，双击 CureFlow 使用，不需要单独安装 Python 或 Node.js。该安装包早于当前前端源码修改，**不包含此后的界面更新**；也尚未完成干净机器与代码签名验收。若要体验当前源码界面，请按第 6 节从源码启动；重新分发前须重新构建并验收安装包。
+
+对于由多个 AI agent 协作完成的分析报告，底层研究工作流还支持：
 
 1. **追溯错误**（Semantic Artifact Provenance）：从产出的报告回溯到每个中间节点、每个证据引用
 2. **传播分析**（Contamination Tracking）：错误从源节点到下游节点的传播路径
@@ -23,7 +29,7 @@ CureFlow 是一个多智能体协作系统的中间件层：当一个由多个 A
 
 ---
 
-## 2. v2 算法升级
+## 2. 历史研究工作流：v2 算法升级
 
 相比 v1 baseline，v2 在三个层面做了数据驱动改造：
 
@@ -33,7 +39,7 @@ CureFlow 是一个多智能体协作系统的中间件层：当一个由多个 A
 | **恢复策略** | 3 策略硬编码 | `Strategy` Protocol + `@register_strategy` registry | 加 1 策略 = 1 class + 1 decorator，0 行改 planner |
 | **Artifact 缓存** | 无淘汰 KV | `SemanticLRUCache` (4 规则：LRU 兜底 + 中心性加权 + 失败拒绝 + size cap) | opt-in，默认 off（向后兼容） |
 
-**v2 测试覆盖**：+96 测试（33 scheduler + 34 strategy + 29 cache），全量 **731/731 pytest PASS**。
+**v2 阶段记录**：当时新增 96 项测试（33 scheduler + 34 strategy + 29 cache），该阶段曾记录 731/731 通过。这是历史结果，不是当前工作区的全量测试结论；发布前须重新运行测试。
 
 ---
 
@@ -76,12 +82,12 @@ class MyStrategy:
 
 ---
 
-## 5. 数字与限制
+## 5. 实验数字与产品边界
 
-### 5.1 离线 deterministic fixture
-- 所有 LLM 调用走 `default_workflow_llm()` = **项目内置离线 fixture**
-- **不接第三方 Provider**，不消耗 API key
-- 所有 token / calls 数字**不作为真实性能承诺**
+### 5.1 区分离线实验与真实模型
+- 历史确定性实验可使用 `default_workflow_llm()` 的离线 fixture；这不是普通用户在桌面产品里选择的云模型。
+- 桌面产品可按需连接 OpenAI、Qwen、DeepSeek、豆包；本地文件检查不依赖云模型。密钥由使用者提供并明确授权调用，不随安装包分发。
+- fixture 的 token / calls 数字不代表第三方服务性能，也不能当作产品成本或成功率承诺。真实 Provider 的实验数字只适用于对应实验条件。
 
 ### 5.2 5-axis 指标（Stage 1.5 frozen）
 | axis | 含义 |
@@ -94,33 +100,33 @@ class MyStrategy:
 
 **不可改**。M1（Qwen 60 trial）/ M3（DeepSeek 60 trial）evidence 锁在 `experiments/results/exp02/`。
 
-### 5.3 当前测试覆盖
-- 960 pytest PASS（包含 provenance / recovery / Desktop / session-key multi-provider gate / claim grounding / task router）
-- 不破 5-axis / 4-tuple / envelope classifier / provider adapter
+### 5.3 当前验证方式
+- 在当前源码和环境中运行 `python -m pytest tests/ -q`；不要把旧交接文档中的 609、731 或 960 项通过数当作当前验收结果。
+- 运行 `python scripts/verify_evidence_sha.py` 检查历史冻结证据；本次核查输出为 `Verified 284 files, 0 mismatch`，后续改动仍须重新核验。
+- 发布桌面版前还须运行 `cd desktop` 后的 `npm run smoke-test`，并在干净 Windows 机器上验安装、启动、文件导入和卸载。
 
 ---
 
 ## 6. 怎么跑
 
-### 6.1 装依赖
+### 6.1 开发者安装依赖
 ```powershell
-# 项目根
-cd C:\Users\Lenovo\.minimax-agent-cn\projects\poc
+# 在源码根目录执行
 pip install -r requirements.txt
 ```
 
 ### 6.2 跑测试
 ```powershell
 python -m pytest tests/ -q
-# 当前期望: 960 passed
+python scripts/verify_evidence_sha.py
 ```
 
-### 6.3 跑 desktop POC
+### 6.3 从源码启动桌面版
 ```powershell
 cd desktop
 npm install
 npm start
-# 第一次会 build vite + 启动 electron + 自动 spawn python backend
+# 构建界面、启动 Electron，并自动启动本地服务
 ```
 
 桌面端支持上传不超过 5 MB 的 `.csv` 或 `.xlsx`。XLSX 会读取全部可见且非空的工作表，每表最多 10000 行数据和 100 列。单表会自动识别中英文经营字段；其他矩形数值数据进入本地通用表格画像。多工作表文件会进入关系分析，区分训练集与实验集，列出共有字段、仅单表字段，并把“训练集有值而实验集为空”的列标为结构上的候选目标列。该判断只描述数据结构，不代替题目对业务含义或预测目标的定义。
@@ -152,21 +158,21 @@ poc/
 │   └── runner.py      # 向后兼容 run_baseline_workflow
 ├── cureflow_app/      # Desktop backend (HTTP API)
 ├── desktop/           # Electron + Vite + React 前端
-├── tests/             # 731 测试
+├── tests/             # 自动化测试；数量以本次 pytest 结果为准
 └── experiments/       # M1 / M3 60 trial evidence（frozen）
 ```
 
 ---
 
-## 8. 不在 POC 范围内
+## 8. 当前限制
 
-- 真实第三方 Provider 接入（仅 mock）
-- 商业化 / 打包 / 安装程序
-- 多用户 / 并发 / 部署
-- 数据隐私合规
-- 国际化（i18n）
+- 已有 Windows 安装包验证版，但尚需在另一台干净 Windows 机器完成安装、卸载及 XLSX 验收；当前没有受信任的代码签名，不应宣称已可大规模公开分发。
+- 可接入真实第三方 Provider，但调用是否可用取决于使用者的有效密钥、模型权限、网络和明确授权；不保证所有模型始终可用。
+- 局域网链接只适合可信网络试用；当前缺少 HTTPS、多用户隔离和正式账号体系，不应公开到互联网或用于敏感数据。
+- AI 解读和统计线索不能代替原始记录核查与领域专家判断；当前选择性恢复计划与实际已执行的复测结果必须区分。
+- 语言界面目前主要面向中文用户；尚未提供完整国际化。
 
-详见 `experiments/results/exp02/M3_PHASE_B_REPORT.md` 看 M3 60 trial 横评。
+历史 M3 实验的条件和数字见 `experiments/results/exp02/M3_PHASE_B_REPORT.md`，不能外推为当前桌面版的整体表现。
 
 ---
 
@@ -177,4 +183,4 @@ poc/
 - **加 1 缓存规则**：`artifacts/cache.py` 继承 `EvictionPolicy` 写 1 class
 - **加 1 fault type**：`contamination/propagation.py` 写 1 propagation 函数
 
-每个改动加对应 `tests/test_*.py` 单元测试，**全量 731+ PASS** 才算完成。
+每个改动应有相应测试，并以当前源码运行的全量测试、证据校验和桌面验收结果为准，不沿用历史通过数量。

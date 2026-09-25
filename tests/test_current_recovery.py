@@ -103,3 +103,13 @@ def test_no_issues_requires_no_recovery() -> None:
     assert result["status"] == "no_recovery_needed"
     assert result["summary"]["selectiveRecomputeSteps"] == 0
     assert result["impactedTools"] == []
+
+
+def test_recovery_uses_full_issue_count_and_hidden_issue_types() -> None:
+    repair = _plan([_issue("trim_whitespace")], review=300)
+    repair["summary"].update({"issueCount": 300, "byType": {"trim_whitespace": 1, "formula_error": 299}})
+    result = _build(repair)
+    assert result["summary"]["issueCount"] == 300
+    assert result["summary"]["shownIssueCount"] == 1
+    assert result["summary"]["impactedToolCount"] == 5
+    assert result["status"] == "review_required"

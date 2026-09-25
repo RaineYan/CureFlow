@@ -7,6 +7,7 @@ from workflow.domain_knowledge import (
     provider_safe_method_pack,
     select_method_pack,
 )
+from workflow.analysis_tools import run_analysis_tools
 
 
 def _pack(columns, goal="auto", row_count=100, config=None, max_cards=9):
@@ -126,3 +127,46 @@ def test_method_annotation_explains_use_requirements_checks_and_limits() -> None
     assert all(label in method["method"] for label in ("适用：", "做法：", "最低条件：", "必须核对："))
     assert method["blockedClaims"]
     assert method["readinessNote"]
+
+
+def test_every_general_card_can_enter_a_relevant_task_pack() -> None:
+    goals = (
+        "data_quality", "descriptive_profile", "group_comparison",
+        "relationship_review", "trend_forecast", "causal_evaluation",
+    )
+    selected = {
+        method["id"]
+        for goal in goals
+        for method in _pack(["字段甲", "字段乙"], goal=goal, row_count=100)["methods"]
+    }
+    assert {card["id"] for card in METHOD_CARDS if card["domain"] == "general"} <= selected
+
+
+def test_card_application_requires_a_real_executed_tool_reference() -> None:
+    csv_text = "数值,类别\n1,A\n2,A\n3,B\n4,B\n"
+    tools = run_analysis_tools(csv_text, run_id="method_link", goal="data_quality")
+    pack = select_method_pack(
+        ["数值", "类别"], goal="data_quality", row_count=4,
+        analysis_tools=tools,
+    )
+    quality = next(card for card in pack["methods"] if card["id"] == "quality_dimensions")
+    assert quality["applicationStatus"] == "partial"
+    assert quality["executionEvidenceRefs"] == [
+        next(tool["evidenceRef"] for tool in tools["executedTools"] if tool["key"] == "quality_audit")
+    ]
+    assert pack["partiallyAppliedMethodCount"] == sum(
+        card["applicationStatus"] == "partial" for card in pack["methods"]
+    )
+    safe = provider_safe_method_pack(pack)
+    assert safe["methods"][0]["applicationStatus"] == "partial"
+    assert "https://" not in str(safe)
+
+    unverified = select_method_pack(
+        ["数值", "类别"], goal="data_quality", row_count=4,
+        analysis_tools={"analysisProcess": {"methodDecisions": [
+            {"methodCardIds": ["quality_dimensions"], "status": "executed", "evidenceRef": "made-up"},
+        ]}},
+    )
+    quality = next(card for card in unverified["methods"] if card["id"] == "quality_dimensions")
+    assert quality["applicationStatus"] == "reference_only"
+    assert quality["executionEvidenceRefs"] == []

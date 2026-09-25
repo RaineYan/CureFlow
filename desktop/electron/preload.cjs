@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 contextBridge.exposeInMainWorld("cureflow", {
-  apiBase: "http://127.0.0.1:8766",
+  apiBase: `http://127.0.0.1:${process.env.CUREFLOW_BACKEND_PORT || 8766}`,
   platform: process.platform,
   selectDataFile: () => ipcRenderer.invoke("cureflow:select-data-file"),
   // Backward-compatible alias for older renderer builds.
@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld("cureflow", {
   exportReport: (payload) => ipcRenderer.invoke("cureflow:export-report", payload),
   saveDataFile: (payload) => ipcRenderer.invoke("cureflow:save-data-file", payload),
   configureProvider: (payload) => ipcRenderer.invoke("cureflow:configure-provider", payload),
+  manageKeys: (payload) => ipcRenderer.invoke("cureflow:keys", payload),
+  probeProvider: (provider) => ipcRenderer.invoke("cureflow:probe-provider", provider),
+  restartBackend: () => ipcRenderer.invoke("cureflow:restart-backend"),
   setUiScale: (value) => {
     const factor = Number(value);
     if (!Number.isFinite(factor) || factor < 0.85 || factor > 1.35) {

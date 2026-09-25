@@ -19,7 +19,7 @@ def _run(csv_text: str, **kwargs):
 def test_analysis_goal_is_strict() -> None:
     assert validate_analysis_goal("score_audit") == "score_audit"
     for goal in (
-        "descriptive_profile", "group_comparison", "relationship_review",
+        "exploratory_analysis", "descriptive_profile", "group_comparison", "relationship_review",
         "trend_forecast", "causal_evaluation",
     ):
         assert validate_analysis_goal(goal) == goal
@@ -134,6 +134,34 @@ def test_distribution_tool_reports_locations_without_calling_them_errors() -> No
     assert finding["details"]["outlierLocations"] == [{"sheet": "数据", "cell": "B12", "row": 12}]
 
 
+def test_product_distribution_uses_same_iqr_gate_as_repair_review() -> None:
+    csv_text = "组别,测量值\n" + "\n".join(
+        f"{group},{value}" for group, values in (("A", range(1, 21)), ("B", range(101, 121))) for value in values
+    ) + "\n"
+    repair_plan = build_repair_plan(csv_text, filename="grouped.csv")
+    result = _run(csv_text, repair_plan=repair_plan)
+    distribution = next(tool for tool in result["executedTools"] if tool["key"] == "distribution_profile")
+    field = next(item for item in distribution["payload"]["fields"] if item["column"] == "测量值")
+    assert field["iqrScreening"]["status"] == "skipped"
+    assert field["outlierCount"] == 0
+    assert not any(item["type"] == "distribution_outlier" for item in result["findings"])
+    assert any(item["key"] == "group_comparison" for item in result["executedTools"])
+
+
+def test_rate_distribution_keeps_descriptives_without_iqr_error_candidates() -> None:
+    values = [round((index % 40 - 20) / 100, 3) for index in range(100)] + [-0.71]
+    csv_text = "学业进步率\n" + "\n".join(str(value) for value in values) + "\n"
+    repair_plan = build_repair_plan(csv_text, filename="rates.csv")
+    result = _run(csv_text, repair_plan=repair_plan)
+    distribution = next(tool for tool in result["executedTools"] if tool["key"] == "distribution_profile")
+    field = distribution["payload"]["fields"][0]
+    assert field["column"] == "学业进步率"
+    assert field["count"] == len(values)
+    assert field["iqrScreening"]["status"] == "skipped"
+    assert field["outlierCount"] == 0
+    assert not any(item["type"] == "distribution_outlier" for item in result["findings"])
+
+
 def test_rank_tool_reports_exact_invalid_cell() -> None:
     result = _run("学号,班级排名,班级总人数\nA,12,10\nB,2,10\n", sheet="0")
     finding = next(item for item in result["findings"] if item["type"] == "rank_consistency")
@@ -185,8 +213,167 @@ def test_provider_projection_removes_locations_and_category_labels() -> None:
     assert safe["privacy"]["rawRowsSentToProvider"] is False
 
 
+def test_provider_projection_excludes_chart_points_and_process_payload() -> None:
+    csv_text = "月份,指标,辅助\n" + "\n".join(
+        f"2026-{month:02d},{month},{month * 3}" for month in range(1, 9)
+    ) + "\n"
+    result = _run(
+        csv_text, goal="exploratory_analysis",
+        analysis_config={"measureColumn": "指标", "timeColumn": "月份"},
+    )
+    safe = provider_safe_tool_results(result)
+    relationship = next(item for item in safe["executedTools"] if item["key"] == "relationship_screen")
+    assert "points" not in relationship["payload"]["timeTrend"]
+    assert "analysisProcess" not in safe
+
+
 def test_all_tool_outputs_have_stable_evidence_refs() -> None:
     result = _run("字段A,字段B\n1,2\n2,4\n3,6\n4,8\n5,10\n6,12\n7,14\n8,16\n")
     assert len(result["executedTools"]) == 5
     assert all(item["status"] == "success" for item in result["executedTools"])
     assert all(item["evidenceRef"].startswith("tool_test/analysis_tool_") for item in result["executedTools"])
+
+
+def test_exploratory_process_contains_preprocessing_visuals_and_method_boundaries() -> None:
+    csv_text = "时间,组别,指标,辅助值\n" + "\n".join(
+        f"2026-{month:02d},{'甲' if month <= 6 else '乙'},{month * 10},{month * 20}"
+        for month in range(1, 13)
+    ) + "\n"
+    result = _run(
+        csv_text,
+        goal="exploratory_analysis",
+        analysis_config={"measureColumn": "指标", "groupColumn": "组别", "timeColumn": "时间"},
+    )
+    process = result["analysisProcess"]
+    assert process["version"] == "analysis_process_v1"
+    assert [stage["key"] for stage in process["stages"]] == [
+        "understand", "preprocess", "visualize", "analyze", "validate",
+    ]
+    chart_types = {chart["type"] for chart in process["visualizations"]}
+    assert chart_types >= {"histogram", "correlation", "line", "comparison"}
+    histogram = next(chart for chart in process["visualizations"] if chart["type"] == "histogram")
+    assert sum(item["value"] for item in histogram["series"]) == 12
+    assert len(next(chart for chart in process["visualizations"] if chart["type"] == "line")["series"]) == 12
+    assert process["preprocessing"]["automaticMutation"] is False
+    assert "不代表已执行所有" in process["boundary"]
+
+
+def test_process_reports_preprocessing_review_without_guessing_values() -> None:
+    result = _run(
+        "编号,值\nA,1\nA,1\nB,\nC,3\n",
+        goal="exploratory_analysis",
+        repair_plan={"summary": {"safeFixCount": 0, "reviewCount": 2}},
+    )
+    items = {item["key"]: item for item in result["analysisProcess"]["preprocessing"]["items"]}
+    assert items["missing"]["count"] == 1
+    assert items["duplicates"]["count"] == 1
+    assert "不会" not in items["missing"]["action"]
+    assert result["analysisProcess"]["stages"][1]["status"] == "review_required"
+
+
+def test_selective_execution_physically_skips_unselected_numeric_tools(monkeypatch) -> None:
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("unaffected numeric tool preparation must not run")
+
+    monkeypatch.setattr("workflow.analysis_tools._numeric_columns", fail_if_called)
+    monkeypatch.setattr("workflow.analysis_tools._relationship_numeric_columns", fail_if_called)
+    result = _run(
+        "编号,备注\nA,ok\nB,clean\n",
+        execute_tool_keys=["quality_audit"],
+    )
+    assert [item["key"] for item in result["executedTools"]] == ["quality_audit"]
+    assert result["execution"] == {
+        "mode": "selected",
+        "executedToolKeys": ["quality_audit"],
+        "reusedToolKeys": [],
+    }
+
+
+def test_selective_execution_rejects_tool_outside_goal() -> None:
+    with pytest.raises(ValueError, match="本次分析目标未使用"):
+        _run(
+            "编号,值\nA,1\nB,2\n",
+            goal="data_quality",
+            execute_tool_keys=["relationship_screen"],
+        )
+
+
+def test_categorical_frequency_is_calculated_locally_with_explicit_denominator() -> None:
+    result = _run(
+        "学号,班级,成绩\nA,甲,80\nB,甲,81\nC,甲,82\nD,甲,83\n"
+        "E,乙,84\nF,乙,85\nG,乙,86\nH,乙,87\n",
+        goal="data_quality",
+    )
+    quality = next(tool for tool in result["executedTools"] if tool["key"] == "quality_audit")
+    profile = next(item for item in quality["payload"]["categoricalProfiles"] if item["column"] == "班级")
+    assert profile["validCount"] == 8
+    assert profile["categoryCount"] == 2
+    assert {item["sharePct"] for item in profile["frequencies"]} == {50.0}
+    assert all(item["column"] != "学号" for item in quality["payload"]["categoricalProfiles"])
+    assert "甲" not in str(provider_safe_tool_results(result))
+
+
+def test_regular_datetime_series_reports_gap_candidate_without_claiming_missing_data() -> None:
+    dates = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04",
+             "2026-01-05", "2026-01-08", "2026-01-09", "2026-01-10",
+             "2026-01-11", "2026-01-12"]
+    csv_text = "日期,指标\n" + "\n".join(f"{day},{index}" for index, day in enumerate(dates, 1))
+    result = _run(csv_text, goal="trend_forecast", analysis_config={
+        "measureColumn": "指标", "timeColumn": "日期",
+    })
+    relationship = next(tool for tool in result["executedTools"] if tool["key"] == "relationship_screen")
+    cadence = relationship["payload"]["timeTrend"]["cadence"]
+    assert cadence["regularCadence"] is True
+    assert cadence["gapCandidateCount"] == 1
+    finding = next(item for item in result["findings"] if item["type"] == "time_gap_candidate")
+    assert "不等于记录缺失" in finding["explanation"]
+
+
+def test_group_comparison_includes_median_and_spread_not_only_mean() -> None:
+    result = _run(
+        "组别,数值\n甲,10\n甲,11\n甲,12\n甲,100\n乙,20\n乙,21\n乙,22\n乙,23\n",
+        goal="group_comparison", analysis_config={"groupColumn": "组别", "measureColumn": "数值"},
+    )
+    comparison = next(tool for tool in result["executedTools"] if tool["key"] == "group_comparison")["payload"]["comparisons"][0]
+    assert comparison["highestMean"] > comparison["lowestMean"]
+    assert comparison["highestMedian"] < comparison["lowestMedian"]
+    assert comparison["highestStd"] > comparison["lowestStd"]
+
+
+def test_method_decisions_distinguish_executed_from_skipped_and_link_basis() -> None:
+    result = _run("编号,类别\nA,甲\nB,甲\nC,乙\nD,乙\n", goal="data_quality")
+    decisions = {item["method"]: item for item in result["analysisProcess"]["methodDecisions"]}
+    assert decisions["缺失、重复与分类频数"]["status"] == "executed"
+    assert decisions["连续数值分布"]["status"] == "skipped"
+    assert decisions["时间顺序与采样间隔"]["status"] == "skipped"
+    assert decisions["缺失、重复与分类频数"]["sourceUrl"].startswith("https://www.itl.nist.gov/")
+    assert decisions["连续数值分布"]["evidenceRef"] is None
+
+
+def test_two_categorical_fields_use_cross_tab_without_inventing_significance() -> None:
+    result = _run(
+        "渠道,状态\n线上,完成\n线上,完成\n线上,完成\n线上,取消\n"
+        "线下,完成\n线下,取消\n线下,取消\n线下,取消\n",
+        goal="group_comparison", analysis_config={"groupColumn": "渠道"},
+    )
+    group = next(tool for tool in result["executedTools"] if tool["key"] == "group_comparison")
+    table = group["payload"]["categoryCrossTabs"][0]
+    assert table["pairedRows"] == 8
+    assert sum(cell["count"] for cell in table["cells"]) == 8
+    assert next(cell["rowSharePct"] for cell in table["cells"] if cell["row"] == "线上" and cell["column"] == "完成") == 75.0
+    assert result["analysisProcess"]["methodDecisions"][5]["status"] == "executed"
+    assert any(chart["title"].endswith("分类交叉") for chart in result["analysisProcess"]["visualizations"])
+    assert "线上" not in str(provider_safe_tool_results(result))
+
+
+def test_extension_cards_only_offer_real_executors_and_explain_missing_fields() -> None:
+    result = _run("类别,指标\n甲,1\n甲,2\n乙,3\n乙,4\n", goal="data_quality")
+    process = result["analysisProcess"]
+    extensions = {item["method"]: item for item in process["extensions"]}
+    assert extensions["分组数值描述"]["goal"] == "group_comparison"
+    assert extensions["分组数值描述"]["missingFields"] == ["主指标", "分组字段"]
+    assert extensions["双分类交叉计数"]["goal"] == "exploratory_analysis"
+    assert extensions["时间顺序与采样检查"]["status"] == "configurable"
+    assert all(item["goal"] in GOAL_TOOLS for item in process["extensions"])
+    assert {item["method"] for item in process["futureMethods"]} >= {"假设检验", "回归建模", "聚类分群", "预测与预警", "因果评估"}
+    assert all("尚无执行器" in item["requires"] for item in process["futureMethods"])

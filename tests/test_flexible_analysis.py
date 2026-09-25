@@ -17,8 +17,13 @@ from workflow.flexible_analysis import (
     analyze_generic_workbook,
     prepare_tabular_csv,
 )
-from cureflow_app.server import make_handler
-from cureflow_app.provider_runtime import ProviderRun
+from workflow.repair_analysis import build_repair_plan
+from cureflow_app.server import make_handler, probe_provider_connection
+from cureflow_app.provider_runtime import (
+    DesktopProviderError,
+    DesktopProviderRuntime,
+    ProviderRun,
+)
 from llm.base import LLMResponse, UsageType
 
 
@@ -78,6 +83,70 @@ class CompactClaimInterpretationClient(GroundedInterpretationClient):
             provider="deepseek",
             model="deepseek-v4-flash",
             usage_type=UsageType.PROVIDER_REPORTED,
+        )
+
+
+class BlankSummaryCompactClaimClient(CompactClaimInterpretationClient):
+    def __init__(self, blank_summary: object) -> None:
+        super().__init__()
+        self.blank_summary = blank_summary
+
+    def generate(self, prompt: str, *, task_name: str = "") -> LLMResponse:
+        response = super().generate(prompt, task_name=task_name)
+        payload = json.loads(response.text)
+        payload["summary"] = self.blank_summary
+        return LLMResponse(
+            text=json.dumps(payload, ensure_ascii=False),
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            latency_ms=response.latency_ms,
+            provider=response.provider,
+            model=response.model,
+            usage_type=response.usage_type,
+        )
+
+
+class ProviderErrorInterpretationClient(GroundedInterpretationClient):
+    def generate(self, prompt: str, *, task_name: str = "") -> LLMResponse:
+        self.prompts.append(prompt)
+        return LLMResponse(
+            text=json.dumps({
+                "error": "AUTH_ERROR",
+                "message": "HTTP 401: invalid API key",
+            }),
+            provider="openai",
+            model="gpt-5.6-luna",
+            usage_type=UsageType.UNAVAILABLE,
+        )
+
+
+class ConnectionProbeClient:
+    def __init__(self, *, auth_error: bool = False) -> None:
+        self.auth_error = auth_error
+
+    def generate(self, prompt: str, *, task_name: str = "") -> LLMResponse:
+        assert "不包含用户文件或业务数据" in prompt
+        assert task_name == "provider_connection_probe"
+        payload = (
+            {
+                "error": "AUTH_ERROR",
+                "message": "HTTP 401 incorrect_api_key sk-ws-********secret",
+            }
+            if self.auth_error
+            else {
+                "claim_text": "连接验证成功",
+                "evidence_refs": ["connection_probe/fixed@v1"],
+                "confidence": 1.0,
+            }
+        )
+        return LLMResponse(
+            text=json.dumps(payload, ensure_ascii=False),
+            provider="openai",
+            model="gpt-5.6-luna",
+            usage_type=(
+                UsageType.UNAVAILABLE
+                if self.auth_error else UsageType.PROVIDER_REPORTED
+            ),
         )
 
 
@@ -161,6 +230,91 @@ def test_business_sample_keeps_established_mode() -> None:
     }
 
 
+def _business_goal_input(file_format: str = "csv") -> dict:
+    headers = ["年份", "月份", "营业收入", "运营成本", "月活用户", "订单数", "访问量", "渠道", "日期", "客户编号"]
+    rows = [
+        [2025, i, 100 + i * 10, 50 + i * 3, 10 + i, 5 + i, 30 + i * 2,
+         "甲" if i <= 4 else "乙", f"2025-{i:02d}-01", f"00{i}"]
+        for i in range(1, 9)
+    ]
+    if file_format == "xlsx":
+        book = Workbook()
+        book.active.title = "业务明细"
+        for row in [headers, *rows]:
+            book.active.append(row)
+        stream = BytesIO()
+        book.save(stream)
+        book.close()
+        return {"filename": "业务明细.xlsx", "xlsxBase64": base64.b64encode(stream.getvalue()).decode("ascii"), "selectedSheet": "业务明细"}
+    return {
+        "filename": "业务明细.csv",
+        "csvText": "\n".join(",".join(map(str, row)) for row in [headers, *rows]) + "\n",
+    }
+
+
+@pytest.mark.parametrize("file_format", ["csv", "xlsx"])
+@pytest.mark.parametrize("goal", [
+    "data_quality", "descriptive_profile", "group_comparison",
+    "relationship_review", "trend_forecast", "causal_evaluation",
+])
+def test_explicit_goal_keeps_original_business_columns_and_reaches_interpreter(
+    handler_request, file_format: str, goal: str,
+) -> None:
+    from workflow.analysis_tools import GOAL_TOOLS
+
+    client = GroundedInterpretationClient()
+    config = {"measureColumn": "营业收入", "groupColumn": "渠道", "timeColumn": "日期", "identifierColumn": "客户编号"}
+    with patch("cureflow_app.server.DesktopProviderRuntime.resolve", return_value=_provider_run(client)), patch(
+        "cureflow_app.server._analyze_csv_with_provider",
+        side_effect=AssertionError("explicit goal must not execute legacy business claims"),
+    ) as legacy:
+        response = handler_request({
+            **_business_goal_input(file_format), "analysisGoal": goal, "analysisConfig": config,
+            "providerMode": "openai_responses", "confirmLive": True, "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 200, response["json"]
+    legacy.assert_not_called()
+    result = response["json"]
+    assert result["input"]["analysisConfig"] == config
+    assert result["input"]["rowCount"] == 8
+    assert result["input"]["columnCount"] == 10
+    assert set(tool["key"] for tool in result["analysisTools"]["executedTools"]) == GOAL_TOOLS[goal]
+    assert len(client.prompts) == 1
+    packet = json.loads(client.prompts[0].rsplit("<UNTRUSTED_EVIDENCE>", 1)[1].split("</UNTRUSTED_EVIDENCE>", 1)[0])
+    assert packet["analysisTools"]["goal"] == goal
+    assert packet["analysisTools"]["analysisConfig"] == config
+    questions = {
+        "data_quality": "数据可靠吗？", "descriptive_profile": "现在是什么情况？",
+        "group_comparison": "哪些群体有差异？", "relationship_review": "哪些因素有关联？",
+        "trend_forecast": "趋势怎样，会怎么变？", "causal_evaluation": "措施真的有效吗？",
+    }
+    assert result["report"].startswith(f"# {questions[goal]}")
+    if file_format == "xlsx":
+        assert result["input"]["sheet"] == "业务明细"
+    if goal == "relationship_review":
+        candidates = result["analysisTools"]["executedTools"][0]["payload"]["candidates"]
+        assert candidates
+        assert all("营业收入" in {item["left"], item["right"]} for item in candidates)
+    if goal == "trend_forecast":
+        tool = next(item for item in result["analysisTools"]["executedTools"] if item["key"] == "relationship_screen")
+        assert tool["payload"]["timeTrend"]["timeColumn"] == "日期"
+        assert tool["payload"]["timeTrend"]["comparableRows"] == 8
+    assert result["cost"]["llmCalls"] == 1
+    assert "revenue_growth" not in {metric["key"] for metric in result["metrics"]}
+
+
+def test_invalid_business_goal_measure_is_rejected_before_provider_resolution(handler_request) -> None:
+    with patch("cureflow_app.server.DesktopProviderRuntime.resolve") as resolve:
+        response = handler_request({
+            **_business_goal_input(), "analysisGoal": "relationship_review",
+            "analysisConfig": {"measureColumn": "渠道"},
+            "providerMode": "openai_responses", "confirmLive": True, "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 400
+    assert "主指标" in response["json"]["error"]
+    resolve.assert_not_called()
+
+
 def test_chinese_business_headers_are_mapped_without_fuzzy_guessing() -> None:
     source = (
         "年份,月份,营业收入,运营成本,月活用户,订单数,访问量\n"
@@ -205,6 +359,19 @@ def test_generic_profile_returns_six_truthful_metrics(tmp_path: Path) -> None:
     assert metrics["completeness"]["display"] == "91.67%"
     assert result["mode"] == "OFFLINE_DETERMINISTIC_PROFILE"
     assert result["cost"]["llmCalls"] == 0
+
+
+def test_product_profile_does_not_report_skipped_iqr_as_zero_errors(tmp_path: Path) -> None:
+    csv_text = "组别,测量值\n" + "\n".join(
+        f"{group},{value}" for group, values in (("A", range(1, 21)), ("B", range(101, 121))) for value in values
+    ) + "\n"
+    plan = build_repair_plan(csv_text, filename="grouped.csv")
+    result = analyze_generic_table(csv_text, "grouped.csv", tmp_path, repair_plan=plan)
+    metric = next(item for item in result["metrics"] if item["key"] == "outlier_rate")
+    assert metric["display"] == "未启用"
+    assert "没有符合保守条件的 IQR 筛查列" in result["claims"][2]["content"]
+    assert "不能把未筛查写成异常值为零" in result["claims"][2]["content"]
+    assert "IQR 极端值复核：未启用" in result["report"]
 
 
 def test_generic_profile_claims_have_persisted_evidence(tmp_path: Path) -> None:
@@ -361,6 +528,82 @@ def test_generic_mode_accepts_frozen_compact_claim_contract(handler_request) -> 
     assert interpretation["findings"][0]["confidence"] == "high"
     assert interpretation["findings"][0]["evidenceRefs"]
     assert interpretation["actions"] == []
+
+
+@pytest.mark.parametrize("blank_summary", [None, "", "   "])
+def test_generic_mode_normalizes_compact_contract_with_blank_summary(
+    handler_request, blank_summary: object,
+) -> None:
+    client = BlankSummaryCompactClaimClient(blank_summary)
+    provider_run = ProviderRun(
+        mode="OPENAI_RESPONSES_LIVE",
+        provider="openai",
+        model="gpt-5.6-luna",
+        live=True,
+        client=client,
+        call_budget=6,
+    )
+    with patch(
+        "cureflow_app.server.DesktopProviderRuntime.resolve",
+        return_value=provider_run,
+    ):
+        response = handler_request({
+            "filename": "monitoring.csv",
+            "csvText": _generic_csv(),
+            "providerMode": "openai_responses",
+            "confirmLive": True,
+            "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 200
+    interpretation = response["json"]["aiInterpretation"]
+    assert interpretation["summary"].startswith("当前数据量有限")
+    assert interpretation["findings"][0]["evidenceRefs"]
+
+
+def test_generic_mode_surfaces_provider_error_instead_of_summary_error(
+    handler_request,
+) -> None:
+    client = ProviderErrorInterpretationClient()
+    with patch(
+        "cureflow_app.server.DesktopProviderRuntime.resolve",
+        return_value=_provider_run(client),
+    ):
+        response = handler_request({
+            "filename": "monitoring.csv",
+            "csvText": _generic_csv(),
+            "providerMode": "openai_responses",
+            "confirmLive": True,
+            "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 400
+    assert "OpenAI 鉴权失败" in response["json"]["error"]
+    assert "summary" not in response["json"]["error"]
+
+
+def test_connection_probe_marks_provider_verified_without_user_data() -> None:
+    runtime = DesktopProviderRuntime()
+    provider_run = _provider_run(ConnectionProbeClient())
+    with patch.object(runtime, "resolve", return_value=provider_run):
+        result = probe_provider_connection(
+            runtime, {"provider": "openai", "confirmProbe": True}
+        )
+    assert result["ok"] is True
+    assert result["probeContainsUserData"] is False
+    assert result["status"]["openai"]["connectionVerified"] is True
+
+
+def test_connection_probe_hides_key_fragment_on_auth_failure() -> None:
+    runtime = DesktopProviderRuntime()
+    provider_run = _provider_run(ConnectionProbeClient(auth_error=True))
+    with patch.object(runtime, "resolve", return_value=provider_run):
+        with pytest.raises(DesktopProviderError) as exc_info:
+            probe_provider_connection(
+                runtime, {"provider": "openai", "confirmProbe": True}
+            )
+    message = str(exc_info.value)
+    assert "OpenAI 鉴权失败" in message
+    assert "sk-ws-" not in message
+    assert "secret" not in message
 
 
 def test_related_workbook_uses_provider_without_sending_raw_rows(

@@ -18,6 +18,7 @@ from uuid import uuid4
 import pandas as pd
 
 from artifacts import Artifact, ArtifactRef, ArtifactStore, ArtifactType
+from workflow.repair_analysis import is_derived_rate
 
 
 BUSINESS_REQUIRED = ("year", "revenue", "cost", "users", "orders", "visits")
@@ -197,7 +198,10 @@ def _data_sufficiency(row_count: int) -> dict[str, Any]:
     }
 
 
-def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[str, Any]:
+def analyze_generic_table(
+    csv_text: str, filename: str, data_dir: Path,
+    *, repair_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Profile an arbitrary rectangular table with deterministic evidence."""
     frame = _read_csv_text(csv_text)
     run_id = f"desktop_profile_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid4().hex[:8]}"
@@ -232,6 +236,13 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
 
     numeric: dict[str, pd.Series] = {}
     distribution_numeric: dict[str, pd.Series] = {}
+    iqr_policy = {
+        item["column"]: item
+        for item in (repair_plan or {}).get("summary", {}).get("iqrScreening", [])
+        if item.get("column")
+    }
+    iqr_applied = sum(item.get("status") == "applied" for item in iqr_policy.values())
+    iqr_skipped = sum(item.get("status") == "skipped" for item in iqr_policy.values())
     column_profiles: list[dict[str, Any]] = []
     outlier_cells = 0
     numeric_cells = 0
@@ -255,15 +266,27 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
             numeric[str(column)] = values
             if semantic_kind in {"score", "numeric"}:
                 distribution_numeric[str(column)] = values
-                numeric_cells += int(len(values))
+                if not is_derived_rate(str(column)) and (repair_plan is None or iqr_policy.get(str(column), {}).get("status") == "applied"):
+                    numeric_cells += int(len(values))
             q1 = float(values.quantile(0.25))
             q3 = float(values.quantile(0.75))
             iqr = q3 - q1
-            count = (
-                int(((values < q1 - 1.5 * iqr) | (values > q3 + 1.5 * iqr)).sum())
-                if semantic_kind in {"score", "numeric"} and len(values) >= 4 and iqr > 0
-                else 0
-            )
+            assessment = iqr_policy.get(str(column))
+            if is_derived_rate(str(column)):
+                assessment = {"status": "skipped", "method": "IQR_3.0", "reason": "比率或变化率需先核对分子、分母和计算口径。"}
+                count = 0
+            elif repair_plan is not None:
+                count = (
+                    int(((values < assessment["lowerBound"]) | (values > assessment["upperBound"])).sum())
+                    if semantic_kind in {"score", "numeric"} and assessment and assessment.get("status") == "applied"
+                    else 0
+                )
+            else:
+                count = (
+                    int(((values < q1 - 1.5 * iqr) | (values > q3 + 1.5 * iqr)).sum())
+                    if semantic_kind in {"score", "numeric"} and len(values) >= 4 and iqr > 0
+                    else 0
+                )
             outlier_cells += count
             profile.update({
                 "min": _finite(values.min()),
@@ -271,6 +294,7 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
                 "mean": _finite(values.mean()),
                 "std": _finite(values.std(ddof=0)),
                 "outliers_iqr": count,
+                "iqrScreening": assessment,
             })
         column_profiles.append(profile)
 
@@ -372,7 +396,7 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
         ("completeness", "非空完整率", completeness, [profile_ref]),
         ("numeric_columns", "数值字段", len(numeric), [profile_ref]),
         ("duplicate_rows", "重复行", duplicate_rows, [raw_ref]),
-        ("outlier_rate", "IQR 异常值率", outlier_rate, [profile_ref]),
+        ("outlier_rate", "IQR 极端值复核率" if repair_plan is not None else "IQR 异常值率", outlier_rate, [profile_ref]),
     ]
     metric_refs: dict[str, ArtifactRef] = {}
     metrics: list[dict[str, Any]] = []
@@ -393,12 +417,31 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
             "key": key,
             "label": label,
             "value": value,
-            "display": "不可评估" if key == "outlier_rate" and sufficiency["level"] == "insufficient" else _display(key, value),
+            "display": (
+                "未启用" if key == "outlier_rate" and repair_plan is not None and not iqr_applied
+                else "不可评估" if key == "outlier_rate" and sufficiency["level"] == "insufficient"
+                else _display(key, value)
+            ),
             "artifactRef": _ref_text(reference),
             "evidenceRefs": [_ref_text(item) for item in inputs],
         })
 
     worst = max(column_profiles, key=lambda item: item["missing_rate"])
+    if repair_plan is not None:
+        distribution_claim = (
+            f"识别出 {len(numeric)} 个数值字段。IQR 适用性检查后用于 {iqr_applied} 列、跳过 {iqr_skipped} 列；"
+            f"3×IQR 极端界限产生 {outlier_cells:,} 条人工复核线索，占实际筛查数值的 {outlier_rate * 100:.2f}%。"
+            "未纳入筛查的字段不是判定为正常；筛查线索也不是确认错误。"
+            if iqr_applied else
+            f"识别出 {len(numeric)} 个数值字段，但本次没有符合保守条件的 IQR 筛查列；"
+            f"{iqr_skipped} 列已跳过。不能把未筛查写成异常值为零或数据正确。"
+        )
+    else:
+        distribution_claim = (
+            f"识别出 {len(numeric)} 个数值字段，其中 {len(distribution_numeric)} 个适合连续分布检查；但当前仅 {len(frame)} 行，样本不足以可靠执行 IQR 异常判断。"
+            if sufficiency["level"] == "insufficient"
+            else f"识别出 {len(numeric)} 个数值字段，其中 {len(distribution_numeric)} 个适合连续分布检查；按 1.5×IQR 规则标记 {outlier_cells:,} 个异常单元格，占可检查数值单元格的 {outlier_rate * 100:.2f}%。排名、计数和标识符不参与异常值判断。"
+        )
     claims_spec = [
         (
             "data_quality",
@@ -412,11 +455,7 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
         ),
         (
             "distribution",
-            (
-                f"识别出 {len(numeric)} 个数值字段，其中 {len(distribution_numeric)} 个适合连续分布检查；但当前仅 {len(frame)} 行，样本不足以可靠执行 IQR 异常判断。"
-                if sufficiency["level"] == "insufficient"
-                else f"识别出 {len(numeric)} 个数值字段，其中 {len(distribution_numeric)} 个适合连续分布检查；按 1.5×IQR 规则标记 {outlier_cells:,} 个异常单元格，占可检查数值单元格的 {outlier_rate * 100:.2f}%。排名、计数和标识符不参与异常值判断。"
-            ),
+            distribution_claim,
             [profile_ref, metric_refs["numeric_columns"], metric_refs["outlier_rate"]],
         ),
     ]
@@ -467,6 +506,10 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
         f"- 重复行：{duplicate_rows:,}",
         f"- 数值字段：{len(numeric)}",
         (
+            f"- IQR 极端值复核：用于 {iqr_applied} 列、跳过 {iqr_skipped} 列；{outlier_cells:,} 条线索（不是确认错误）"
+            if repair_plan is not None and iqr_applied else
+            f"- IQR 极端值复核：未启用；{iqr_skipped} 列不满足本次适用条件"
+            if repair_plan is not None else
             "- IQR 异常值：不可评估（有效样本少于 4 行）"
             if sufficiency["level"] == "insufficient"
             else f"- IQR 异常值：{outlier_cells:,}（{outlier_rate * 100:.2f}%）"
@@ -521,7 +564,7 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
     return {
         "runId": run_id,
         "mode": "OFFLINE_DETERMINISTIC_PROFILE",
-        "modeLabel": "通用表格 · 本地确定性分析",
+        "modeLabel": "通用表格 · 本地数据检查（未调用 AI）",
         "metrics": metrics,
         "claims": claims,
         "dataSufficiency": sufficiency,
@@ -534,7 +577,7 @@ def analyze_generic_table(csv_text: str, filename: str, data_dir: Path) -> dict[
             {"key": "merge", "label": "报告合并", "status": "success"},
         ],
         "report": "\n".join(lines),
-        "disclaimer": "该报告是本地确定性表格画像，不把任意字段强行解释为业务含义；充分性标签是透明行数规则，不是统计置信度。标识符、排名和计数字段不会被当作连续测量值执行 IQR；统计筛查不代表业务异常或因果结论。",
+        "disclaimer": "本次仅用当前文件执行本地计算和规则检查，未调用生成式模型；不把任意字段强行解释为业务含义。充分性标签是透明行数规则，不是统计置信度；统计筛查不代表业务异常或因果结论。",
         "cost": {
             "llmCalls": 0,
             "inputTokens": 0,
@@ -787,7 +830,7 @@ def analyze_generic_workbook(
     return {
         "runId": run_id,
         "mode": "OFFLINE_DETERMINISTIC_WORKBOOK_PROFILE",
-        "modeLabel": "多工作表 · 本地确定性关系分析",
+        "modeLabel": "多工作表 · 本地关系检查（未调用 AI）",
         "metrics": metrics,
         "claims": claims,
         "stages": [

@@ -48,6 +48,62 @@ def _repair_preview_json(handler_request, payload: object):
     return handler_request("POST", "/api/repair/preview", json.dumps(payload).encode("utf-8"))
 
 
+def _repair_export_json(handler_request, payload: object):
+    return handler_request("POST", "/api/repair/export", json.dumps(payload).encode("utf-8"))
+
+
+def _repair_issues_json(handler_request, payload: object):
+    return handler_request("POST", "/api/repair/issues", json.dumps(payload).encode("utf-8"))
+
+
+def test_repair_issue_pages_bind_to_input_and_include_later_cells(handler_request) -> None:
+    source = "编号,备注\n" + "".join(f"R{index}, 值{index} \n" for index in range(270))
+    inspection = _inspect_json(handler_request, {"filename": "source.csv", "csvText": source})["json"]
+    body = {"filename": "source.csv", "csvText": source, "inputFingerprint": inspection["inputFingerprint"], "offset": 250, "limit": 40}
+    response = _repair_issues_json(handler_request, body)
+    assert response["status"] == 200
+    assert response["json"]["providerUsed"] is False
+    assert response["json"]["summary"]["issueCount"] == 270
+    assert len(response["json"]["issues"]) == 20
+    assert response["json"]["issues"][0]["location"]["cell"] == "B252"
+    assert response["json"]["nextOffset"] is None
+    bad = _repair_issues_json(handler_request, {**body, "inputFingerprint": "other"})
+    assert bad["status"] == 400
+
+
+def test_repair_issue_page_respects_selected_group_context(handler_request) -> None:
+    source = "性别,测量值\n" + "\n".join(
+        f"{group},{value}" for group, values in (("甲", range(1, 21)), ("乙", range(101, 121))) for value in values
+    ) + "\n"
+    inspection = _inspect_json(handler_request, {"filename": "grouped.csv", "csvText": source})["json"]
+    response = _repair_issues_json(handler_request, {
+        "filename": "grouped.csv", "csvText": source,
+        "inputFingerprint": inspection["inputFingerprint"],
+        "analysisConfig": {"groupColumn": "性别"},
+    })
+    assert response["status"] == 200
+    assessment = next(item for item in response["json"]["summary"]["iqrScreening"] if item["column"] == "测量值")
+    assert assessment["status"] == "skipped"
+    assert "本次已指定分组字段" in assessment["reason"]
+
+
+def test_repair_can_apply_selected_issue_beyond_first_page(handler_request) -> None:
+    source = "编号,备注\n" + "".join(f"R{index}, 值{index} \n" for index in range(260))
+    inspection = _inspect_json(handler_request, {"filename": "source.csv", "csvText": source})["json"]
+    body = {"filename": "source.csv", "csvText": source, "inputFingerprint": inspection["inputFingerprint"]}
+    page = _repair_issues_json(handler_request, {**body, "offset": 250, "limit": 10})["json"]
+    selected = page["issues"][0]
+    exported = handler_request("POST", "/api/repair/export", json.dumps({**body, "approvedFixIds": [selected["id"]]}).encode("utf-8"))
+    assert exported["status"] == 200
+    assert exported["json"]["audit"]["appliedFixIds"] == [selected["id"]]
+    assert "R250,值250" in exported["json"]["csvText"]
+    preview = _repair_preview_json(handler_request, {**body, "approvedFixIds": [selected["id"]]})
+    assert preview["status"] == 200
+    assert preview["json"]["summary"]["beforeIssueCount"] == 260
+    assert preview["json"]["summary"]["afterIssueCount"] == 259
+    assert preview["json"]["changedCells"][0]["location"]["cell"] == "B252"
+
+
 def test_health(handler_request) -> None:
     response = handler_request("GET", "/api/health")
     assert response["status"] == 200
@@ -175,6 +231,119 @@ def test_analyze_runs_local_tools_before_model_interpretation(handler_request) -
     assert recovery["source"]["filename"] == "scores.csv"
     assert recovery["source"]["inputFingerprint"] == response["json"]["input"]["inputFingerprint"]
     assert recovery["executionBoundary"]["planOnly"] is True
+    impact = response["json"]["currentImpactReport"]
+    assert impact["source"]["inputFingerprint"] == response["json"]["input"]["inputFingerprint"]
+    assert impact["summary"]["dataClueCount"] == recovery["summary"]["issueCount"]
+    assert impact["executionBoundary"]["impactIsPlan"] is True
+    assert impact["executionBoundary"]["selectiveRecoveryExecuted"] is False
+
+
+def test_method_card_partial_use_is_backed_by_this_runs_tool_result(handler_request) -> None:
+    response = _post_json(handler_request, {
+        "filename": "quality.csv",
+        "csvText": "数值,类别\n1,A\n2,A\n3,B\n4,B\n",
+        "analysisGoal": "data_quality",
+    })
+    assert response["status"] == 200
+    payload = response["json"]
+    quality = next(
+        card for card in payload["knowledgeContext"]["methods"]
+        if card["id"] == "quality_dimensions"
+    )
+    tool_refs = {tool["evidenceRef"] for tool in payload["analysisTools"]["executedTools"]}
+    assert quality["applicationStatus"] == "partial"
+    assert set(quality["executionEvidenceRefs"]) <= tool_refs
+    assert payload["knowledgeContext"]["partiallyAppliedMethodCount"] >= 1
+
+
+def test_real_file_can_be_checked_without_provider_key_or_model_call(handler_request) -> None:
+    source = "学号,成绩,班级排名,班级总人数\nA,90,1,2\nB,,3,2\n"
+    inspection = _inspect_json(handler_request, {"filename": "scores.csv", "csvText": source})
+    assert inspection["status"] == 200
+    with patch("cureflow_app.provider_runtime.DesktopProviderRuntime.resolve", side_effect=AssertionError("模型不应被调用")):
+        response = _post_json(handler_request, {
+            "filename": "scores.csv", "csvText": source,
+            "analysisGoal": "exploratory_analysis", "providerMode": "offline",
+        })
+    assert response["status"] == 200
+    result = response["json"]
+    assert result["cost"]["llmCalls"] == 0
+    assert result["provider"]["live"] is False
+    assert result["input"]["inputFingerprint"] == inspection["json"]["inputFingerprint"]
+    assert result["repairPlan"]["summary"]["issueCount"] >= 2
+    assert result["analysisTools"]["summary"]["executedToolCount"] >= 1
+
+
+def test_corrected_copy_recomputes_only_impacted_tools_and_reuses_the_rest(handler_request) -> None:
+    source = "编号,组别,数值,备注\n" + "\n".join(
+        f"R{index},{'甲' if index < 5 else '乙'},{index}, {'待核对' if index == 1 else '正常'} "
+        for index in range(1, 9)
+    ) + "\n"
+    first = _post_json(handler_request, {
+        "filename": "source.csv", "csvText": source, "analysisGoal": "auto",
+    })
+    assert first["status"] == 200
+    original = first["json"]
+    issue = next(
+        item for item in original["repairPlan"]["issues"]
+        if item["type"] == "trim_whitespace"
+    )
+    exported = _repair_export_json(handler_request, {
+        "filename": "source.csv",
+        "csvText": source,
+        "sourceRunId": original["runId"],
+        "inputFingerprint": original["input"]["inputFingerprint"],
+        "approvedFixIds": [issue["id"]],
+        "manualCorrections": [],
+    })
+    assert exported["status"] == 200
+    assert exported["json"]["audit"]["appliedIssueTypes"] == ["trim_whitespace"]
+
+    recovered = _post_json(handler_request, {
+        "filename": exported["json"]["filename"],
+        "csvText": exported["json"]["csvText"],
+        "analysisGoal": "auto",
+        "recoveryContext": {
+            "sourceRunId": original["runId"],
+            "sourceInputFingerprint": original["input"]["inputFingerprint"],
+            "appliedIssueIds": [issue["id"]],
+        },
+    })
+    assert recovered["status"] == 200
+    execution = recovered["json"]["recoveryExecution"]
+    assert execution["actualSelectiveExecution"] is True
+    assert execution["executedToolKeys"] == ["quality_audit", "group_comparison"]
+    assert execution["reusedToolKeys"] == [
+        "distribution_profile", "rank_consistency", "relationship_screen",
+    ]
+    tools = recovered["json"]["analysisTools"]
+    assert tools["summary"]["actuallyExecutedToolCount"] == 2
+    assert tools["summary"]["reusedToolCount"] == 3
+    assert {
+        item["key"]: item.get("executionStatus") for item in tools["executedTools"]
+    } == {
+        "quality_audit": "recomputed",
+        "distribution_profile": "reused",
+        "rank_consistency": "reused",
+        "relationship_screen": "reused",
+        "group_comparison": "recomputed",
+    }
+
+
+def test_selective_recovery_rejects_fix_not_bound_to_exported_copy(handler_request) -> None:
+    source = "编号,备注\nA, ok \nB,clean\n"
+    first = _post_json(handler_request, {"filename": "source.csv", "csvText": source})["json"]
+    response = _post_json(handler_request, {
+        "filename": "changed.csv",
+        "csvText": "编号,备注\nA,ok\nB,clean\n",
+        "recoveryContext": {
+            "sourceRunId": first["runId"],
+            "sourceInputFingerprint": first["input"]["inputFingerprint"],
+            "appliedIssueIds": ["not-from-this-run"],
+        },
+    })
+    assert response["status"] == 400
+    assert "授权不存在" in response["json"]["error"]
 
 
 def test_relationship_question_controls_tools_and_report(handler_request) -> None:

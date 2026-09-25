@@ -3,8 +3,9 @@
 The product default stays deterministic and offline.  Each cloud provider is
 available only when three independent signals agree: the renderer explicitly
 selects it for one run, its local live-confirmation environment flag is set,
-and its API key exists in the backend process environment.  Secrets are never
-part of request/response payloads or serialized configuration.
+and its API key exists in the backend process environment. Secrets are never
+part of analysis/audit payloads or serialized configuration. The optional
+loopback setup endpoint only populates the current process environment.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from llm.provider_selection import (
     build_llm_client,
 )
 from llm.task_router import TaskAwareLLMClient
+from llm.adapters.doubao import DoubaoClient
 
 
 OFFLINE_MODE = "offline"
@@ -42,6 +44,13 @@ DEEPSEEK_MODEL = "deepseek-v4-flash"
 DEEPSEEK_KEY_ENV = "DEEPSEEK_API_KEY"
 DEEPSEEK_LIVE_CONFIRM_ENV = "CUREFLOW_ENABLE_DEEPSEEK_LIVE"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DOUBAO_MODE = "doubao_chat"
+# User-confirmed Ark model ID from the console's actual REST example; this is
+# model selection only, not evidence of a configured key or a verified call.
+DOUBAO_MODEL = "doubao-seed-2-0-pro-260215"
+DOUBAO_MODEL_ENV = "DOUBAO_MODEL"
+DOUBAO_KEY_ENV = "DOUBAO_API_KEY"
+DOUBAO_LIVE_CONFIRM_ENV = "CUREFLOW_ENABLE_DOUBAO_LIVE"
 # A complete Desktop workflow has six LLM execution units: three branch
 # claims plus three report sections.  This product-run ceiling is therefore
 # 6.  It is intentionally separate from OPENAI_AB_PILOT_V1's 3-call ceiling,
@@ -103,6 +112,11 @@ class DesktopProviderRuntime:
 
     def __init__(self) -> None:
         self._killed = False
+        self._verified_providers: set[str] = set()
+        self._last_errors: dict[str, str] = {}
+        self._persisted_providers: set[str] = set()
+        self._persistence_opted_in = False
+        self._persistence_error: str | None = None
         self._lock = Lock()
 
     @property
@@ -116,9 +130,39 @@ class DesktopProviderRuntime:
             self._killed = True
         return self.status()
 
+    def clear_verification(self, provider: str) -> None:
+        with self._lock:
+            self._verified_providers.discard(provider)
+            self._last_errors.pop(provider, None)
+
+    def record_connection_error(self, provider: str, message: str) -> None:
+        if provider in {"openai", "qwen", "deepseek", "doubao"}:
+            with self._lock:
+                self._verified_providers.discard(provider)
+                self._last_errors[provider] = message
+
+    def set_persistence(self, opted_in: bool, providers: set[str]) -> None:
+        with self._lock:
+            self._persistence_opted_in = opted_in
+            self._persisted_providers = set(providers)
+            self._persistence_error = None
+
+    def set_persistence_error(self, message: str) -> None:
+        with self._lock:
+            self._persistence_error = message
+
+    def mark_verified(self, provider: str) -> None:
+        with self._lock:
+            self._verified_providers.add(provider)
+            self._last_errors.pop(provider, None)
+
+    def is_verified(self, provider: str) -> bool:
+        with self._lock:
+            return provider in self._verified_providers
+
     def status(self) -> dict[str, Any]:
         def cloud_status(
-            *, mode: str, model: str, key_env: str, confirm_env: str,
+            *, provider: str, mode: str, model: str, key_env: str, confirm_env: str,
         ) -> dict[str, Any]:
             local_confirmed = os.environ.get(confirm_env) == "1"
             key_present = bool(os.environ.get(key_env))
@@ -129,6 +173,15 @@ class DesktopProviderRuntime:
                 blockers.append("LOCAL_LIVE_CONFIRMATION_MISSING")
             if not key_present:
                 blockers.append("API_KEY_ENV_MISSING")
+            connection_verified = self.is_verified(provider)
+            with self._lock:
+                last_error = self._last_errors.get(provider)
+                persisted = provider in self._persisted_providers
+                opted_in = self._persistence_opted_in
+            if provider == "doubao" and not model:
+                blockers.append("MODEL_ID_MISSING")
+            if not blockers and not connection_verified:
+                blockers.append("PROVIDER_CONNECTION_UNVERIFIED")
             return {
                 "mode": mode,
                 "model": model,
@@ -140,10 +193,14 @@ class DesktopProviderRuntime:
                 "killSwitchScope": "future_runs_only",
                 "blockers": blockers,
                 "apiKeyPresent": key_present,
+                "connectionVerified": connection_verified,
+                "lastError": last_error,
+                "persistence": {"optedIn": opted_in, "stored": persisted},
                 "apiKeyValueExposed": False,
             }
 
         openai = cloud_status(
+            provider="openai",
             mode=OPENAI_MODE,
             model=OPENAI_MODEL,
             key_env=OPENAI_KEY_ENV,
@@ -151,19 +208,30 @@ class DesktopProviderRuntime:
         )
         openai["priceSnapshot"] = PRICE_SNAPSHOT
         qwen = cloud_status(
+            provider="qwen",
             mode=QWEN_MODE,
             model=QWEN_MODEL,
             key_env=QWEN_KEY_ENV,
             confirm_env=QWEN_LIVE_CONFIRM_ENV,
         )
         deepseek = cloud_status(
+            provider="deepseek",
             mode=DEEPSEEK_MODE,
             model=DEEPSEEK_MODEL,
             key_env=DEEPSEEK_KEY_ENV,
             confirm_env=DEEPSEEK_LIVE_CONFIRM_ENV,
         )
+        doubao = cloud_status(
+            provider="doubao", mode=DOUBAO_MODE,
+            model=os.environ.get(DOUBAO_MODEL_ENV) or DOUBAO_MODEL,
+            key_env=DOUBAO_KEY_ENV, confirm_env=DOUBAO_LIVE_CONFIRM_ENV,
+        )
+        unavailable_price = {"available": False, "reason": "未配置可信目录价；不估算费用"}
+        for state in (qwen, deepseek, doubao):
+            state["priceSnapshot"] = unavailable_price.copy()
         return {
             "defaultMode": "OFFLINE_DETERMINISTIC_FIXTURE",
+            "persistence": {"optedIn": self._persistence_opted_in, "lastError": self._persistence_error},
             "offline": {
                 "mode": OFFLINE_MODE,
                 "model": "fake-deterministic",
@@ -173,6 +241,7 @@ class DesktopProviderRuntime:
             "openai": openai,
             "qwen": qwen,
             "deepseek": deepseek,
+            "doubao": doubao,
         }
 
     def resolve(
@@ -213,6 +282,12 @@ class DesktopProviderRuntime:
                 "confirm_env": DEEPSEEK_LIVE_CONFIRM_ENV,
                 "base_url": DEEPSEEK_BASE_URL,
             },
+            DOUBAO_MODE: {
+                "provider": "doubao", "model": os.environ.get(DOUBAO_MODEL_ENV) or DOUBAO_MODEL,
+                "key_env": DOUBAO_KEY_ENV,
+                "confirm_env": DOUBAO_LIVE_CONFIRM_ENV,
+                "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            },
         }
         if mode not in provider_specs:
             raise DesktopProviderError(f"不支持的模型模式：{mode}")
@@ -233,6 +308,8 @@ class DesktopProviderRuntime:
             raise DesktopProviderError(
                 f"本地运行环境未配置 {spec['provider']} API key"
             )
+        if mode == DOUBAO_MODE and not spec["model"]:
+            raise DesktopProviderError("请先填写已开通的火山方舟模型或接入点 ID")
 
         if mode == OPENAI_MODE:
             client = build_llm_client(
@@ -246,6 +323,8 @@ class DesktopProviderRuntime:
                     ),
                 )
             )
+        elif mode == DOUBAO_MODE:
+            client = DoubaoClient(model=spec["model"])
         else:
             client = RealLLMClient(RealLLMProviderConfig(
                 provider=spec["provider"],

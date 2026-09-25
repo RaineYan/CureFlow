@@ -175,16 +175,6 @@ class Stage(BaseModel):
             raise ValueError("Stage.retries must be >= 0")
         return v
 
-    @field_validator("on_failure")
-    @classmethod
-    def _fallback_required(cls, v: str, info) -> str:  # type: ignore[no-untyped-def]
-        # Cross-field validation: on_failure == "fallback" requires
-        # `fallback` to be set.  Pydantic v2 cross-field validators
-        # are easiest via model_validator(mode='after'), but for
-        # simplicity we just check on the field here and let the
-        # scheduler do a final sanity check in run().
-        return v
-
     def model_post_init(self, __context: Any) -> None:
         # Pydantic v2 hook: enforce on_failure/fallback invariant.
         if self.on_failure == "fallback" and self.fallback is None:

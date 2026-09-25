@@ -136,7 +136,13 @@
 .key-entry input:focus { border-color: #64f0ac; box-shadow: 0 0 0 2px rgba(100,240,172,.12); }
 .key-entry input::placeholder { color: #506a5e; }
 .key-entry button { color: #082016; background: #64f0ac; }
+.provider-model-entry { display: grid; gap: 6px; margin-top: 8px; color: #d9e9e3; font-size: 13px; }
+.provider-model-entry input { width: 100%; min-width: 0; padding: 11px 13px; color: #e4f3ec; background: #07170f; border: 1px solid #315949; border-radius: 8px; font: inherit; }
+.key-remember { display: flex; align-items: center; gap: 9px; margin: 8px 0; color: #d9e9e3; font-size: 13px; }
+.key-remember input { width: 16px; height: 16px; flex: none; }
+.key-saved { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: #a3e6d4; font-size: 12px; }
 .connection-error { color: #ff9d9d; font-size: 10px; font-weight: 600; }
+.connection-success { display: block; color: #77e6c2; font-size: 10px; font-weight: 700; }
 .launcher-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .launcher-primary { color: #082016; background: #64f0ac; }
 .launcher-secondary { color: #aec2b8; background: #142c21; border: 1px solid #315044; }

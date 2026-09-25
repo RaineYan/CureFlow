@@ -14,9 +14,12 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from workflow.repair_analysis import is_derived_rate
+
 
 ANALYSIS_GOALS = {
     "auto": "自动诊断",
+    "exploratory_analysis": "完整探索分析流程",
     "data_quality": "数据质量检查",
     "score_audit": "成绩与排名核验",
     "business_review": "经营数据分析",
@@ -30,7 +33,19 @@ ANALYSIS_GOALS = {
 }
 ANALYSIS_CONFIG_FIELDS = ("measureColumn", "groupColumn", "identifierColumn", "timeColumn")
 MAX_TOOL_FINDINGS = 30
+METHOD_SOURCES = {
+    "categorical_frequency": "https://www.itl.nist.gov/div898/software/dataplot/refman1/auxillar/tabuplot.htm",
+    "numeric_distribution": "https://www.itl.nist.gov/div898/handbook/eda/section3/eda33e.htm",
+    "group_location_scale": "https://www.itl.nist.gov/div898/handbook/eda/section3/boxplot.htm",
+    "time_sequence": "https://www.itl.nist.gov/div898/handbook/pmc/section6/pmc622.htm",
+    "categorical_cross_tab": "https://www.itl.nist.gov/div898/handbook/prc/section4/prc45.htm",
+    "numeric_relationship": "https://www.itl.nist.gov/div898/handbook/eda/section3/eda33q.htm",
+}
 GOAL_TOOLS = {
+    "exploratory_analysis": {
+        "quality_audit", "distribution_profile", "rank_consistency",
+        "relationship_screen", "group_comparison",
+    },
     "data_quality": {"quality_audit", "rank_consistency"},
     "score_audit": {"distribution_profile", "rank_consistency", "group_comparison"},
     "business_review": {"distribution_profile", "relationship_screen", "group_comparison"},
@@ -52,7 +67,7 @@ def validate_analysis_goal(value: Any) -> str:
     goal = str(value or "auto").strip()
     if goal not in ANALYSIS_GOALS:
         raise ValueError(
-            "analysisGoal 必须是 auto、data_quality、score_audit、business_review、"
+            "analysisGoal 必须是 auto、exploratory_analysis、data_quality、score_audit、business_review、"
             "industrial_review、economic_review、descriptive_profile、group_comparison、"
             "relationship_review、trend_forecast 或 causal_evaluation"
         )
@@ -126,6 +141,282 @@ def _finite(value: Any) -> float | None:
     return round(number, 6) if math.isfinite(number) else None
 
 
+def _histogram(values: pd.Series, bin_count: int = 8) -> list[dict[str, Any]]:
+    finite_values = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite_values:
+        return []
+    low, high = min(finite_values), max(finite_values)
+    if low == high:
+        return [{
+            "label": f"{low:.4g}", "lower": _finite(low), "upper": _finite(high),
+            "count": len(finite_values),
+        }]
+    width = (high - low) / bin_count
+    counts = [0] * bin_count
+    for value in finite_values:
+        index = min(int((value - low) / width), bin_count - 1)
+        counts[index] += 1
+    return [
+        {
+            "label": f"{low + index * width:.4g}–{low + (index + 1) * width:.4g}",
+            "lower": _finite(low + index * width),
+            "upper": _finite(low + (index + 1) * width),
+            "count": count,
+        }
+        for index, count in enumerate(counts)
+    ]
+
+
+def _tool_payload(tools: Iterable[dict[str, Any]], key: str) -> dict[str, Any]:
+    tool = next((item for item in tools if item.get("key") == key), None)
+    return dict((tool or {}).get("payload") or {})
+
+
+def build_analysis_process(
+    results: dict[str, Any], repair_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an extensible, UI-facing analysis process from actual tool outputs."""
+    tools = list(results.get("executedTools") or [])
+    quality = _tool_payload(tools, "quality_audit")
+    distribution = _tool_payload(tools, "distribution_profile")
+    relationships = _tool_payload(tools, "relationship_screen")
+    groups = _tool_payload(tools, "group_comparison")
+    ranks = _tool_payload(tools, "rank_consistency")
+    repair_summary = (repair_plan or {}).get("summary") or {}
+    visuals: list[dict[str, Any]] = []
+    missing_series = [
+        {"label": str(column), "value": int(count)}
+        for column, count in (quality.get("missingByColumn") or {}).items()
+        if count
+    ]
+    if missing_series:
+        visuals.append({
+            "key": "missingness", "type": "bar", "title": "各字段缺失数量",
+            "subtitle": "用于决定回源核对、删除还是建模填补；系统不会自动猜填。",
+            "unit": "个", "series": missing_series[:15],
+        })
+    for profile in (quality.get("categoricalProfiles") or [])[:3]:
+        visuals.append({
+            "key": f"category:{profile['column']}", "type": "bar",
+            "title": f"{profile['column']} · 类别频数",
+            "subtitle": f"有效记录 {profile['validCount']} 条；类别比例以有效记录为分母。",
+            "unit": "条", "series": [
+                {"label": item["label"], "value": item["count"]}
+                for item in profile["frequencies"]
+            ],
+        })
+    for field in (distribution.get("fields") or [])[:4]:
+        if field.get("histogram"):
+            visuals.append({
+                "key": f"distribution:{field.get('column')}", "type": "histogram",
+                "title": f"{field.get('column')} · 分布",
+                "subtitle": f"有效值 {field.get('count', 0)} 个；异常候选 {field.get('outlierCount', 0)} 个。",
+                "unit": "行", "series": [
+                    {"label": item.get("label"), "value": item.get("count", 0)}
+                    for item in field.get("histogram", [])
+                ],
+            })
+    candidates = relationships.get("candidates") or []
+    if candidates:
+        visuals.append({
+            "key": "relationships", "type": "correlation", "title": "字段关联强度",
+            "subtitle": "显示 Pearson 相关系数；相关不等于因果。", "unit": "r",
+            "series": [
+                {
+                    "label": f"{item.get('left')} × {item.get('right')}",
+                    "value": item.get("coefficient"), "sampleSize": item.get("pairedRows"),
+                }
+                for item in candidates[:8]
+            ],
+        })
+    trend = relationships.get("timeTrend") or {}
+    if trend.get("points"):
+        visuals.append({
+            "key": "trend", "type": "line", "title": f"{trend.get('measureColumn')} · 时间趋势",
+            "subtitle": f"按 {trend.get('timeColumn')} 排序，展示最多 60 个等距抽样点。",
+            "unit": "", "series": trend.get("points"),
+        })
+    comparisons = groups.get("comparisons") or []
+    if comparisons:
+        visuals.append({
+            "key": "groups", "type": "comparison", "title": "分组均值差异",
+            "subtitle": "仅为描述性比较，尚未控制混杂因素或完成显著性检验。",
+            "unit": "均值", "series": [
+                {
+                    "label": f"{item.get('categoryColumn')} · {item.get('measureColumn')}",
+                    "highLabel": item.get("highestGroup"), "high": item.get("highestMean"),
+                    "lowLabel": item.get("lowestGroup"), "low": item.get("lowestMean"),
+                }
+                for item in comparisons[:6]
+            ],
+        })
+    for table in (groups.get("categoryCrossTabs") or [])[:2]:
+        visuals.append({
+            "key": f"cross:{table['rowColumn']}:{table['columnColumn']}",
+            "type": "bar", "title": f"{table['rowColumn']} × {table['columnColumn']} · 分类交叉",
+            "subtitle": f"基于 {table['pairedRows']} 条同时有值的记录；仅作计数，不代表显著关联。",
+            "unit": "条", "series": [
+                {"label": f"{item['row']} / {item['column']}", "value": item["count"]}
+                for item in table["cells"][:12]
+            ],
+        })
+
+    missing_count = int(quality.get("missingCellCount") or 0)
+    duplicate_count = int(quality.get("duplicateRowCount") or 0)
+    review_count = int(repair_summary.get("reviewCount") or 0)
+    safe_fix_count = int(repair_summary.get("safeFixCount") or 0)
+    preprocessing_items = [
+        {
+            "key": "missing", "label": "缺失值处理", "count": missing_count,
+            "status": "review" if missing_count else "clear",
+            "action": "回到来源核对缺失原因；只有明确规则时才删除或填补。" if missing_count else "本次未发现缺失单元格。",
+        },
+        {
+            "key": "duplicates", "label": "重复记录", "count": duplicate_count,
+            "status": "review" if duplicate_count else "clear",
+            "action": "先确认数据粒度和业务主键，再决定是否去重。" if duplicate_count else "本次未发现完全重复记录。",
+        },
+        {
+            "key": "format", "label": "格式与安全修正", "count": safe_fix_count,
+            "status": "actionable" if safe_fix_count else "clear",
+            "action": "可由用户勾选后在新副本中修正，不覆盖原件。" if safe_fix_count else "没有检测到可直接应用的安全格式修正。",
+        },
+        {
+            "key": "review", "label": "异常与约束复核", "count": review_count,
+            "status": "review" if review_count else "clear",
+            "action": "逐项查看单元格并人工确认，不把统计异常直接当成错误。" if review_count else "当前规则没有生成待人工确认的修正项。",
+        },
+    ]
+    finding_count = int((results.get("summary") or {}).get("findingCount") or 0)
+    stage_refs = {str(tool.get("key")): tool.get("evidenceRef") for tool in tools}
+    stages = [
+        {"key": "understand", "number": 1, "title": "数据理解", "status": "completed",
+         "summary": f"读取 {(results.get('summary') or {}).get('rowCount', 0)} 行，识别字段角色与分析目标。", "evidenceRefs": []},
+        {"key": "preprocess", "number": 2, "title": "预处理检查",
+         "status": "review_required" if any(item["count"] for item in preprocessing_items) else "completed",
+         "summary": "先核对缺失、重复、格式和异常候选，不自动改写数据。",
+         "evidenceRefs": [stage_refs[key] for key in ("quality_audit", "rank_consistency") if stage_refs.get(key)]},
+        {"key": "visualize", "number": 3, "title": "探索性可视化",
+         "status": "completed" if visuals else "limited",
+         "summary": f"基于本地计算生成 {len(visuals)} 张图；没有足够数据时明确显示限制。",
+         "evidenceRefs": [stage_refs[key] for key in ("distribution_profile", "relationship_screen", "group_comparison") if stage_refs.get(key)]},
+        {"key": "analyze", "number": 4, "title": "按问题分析", "status": "completed",
+         "summary": f"实际执行 {len(tools)} 个分析工具，产生 {finding_count} 项可核对线索。",
+         "evidenceRefs": [value for value in stage_refs.values() if value]},
+        {"key": "validate", "number": 5, "title": "验证与解释",
+         "status": "review_required" if finding_count else "completed",
+         "summary": "区分描述、相关和因果；结论仍需证据审计与业务复核。",
+         "evidenceRefs": [value for value in stage_refs.values() if value]},
+    ]
+    config = results.get("analysisConfig") or {}
+    extensions = [
+        {"method": "数值分布与图表", "goal": "descriptive_profile",
+         "status": "executed" if distribution.get("fields") else "configurable",
+         "requires": "选择数值主指标；该字段至少有 4 个有效数值。",
+         "missingFields": ["主指标"] if not config.get("measureColumn") else [],
+         "result": f"已形成 {len(distribution.get('fields') or [])} 个数值画像。" if distribution.get("fields") else None},
+        {"method": "分组数值描述", "goal": "group_comparison",
+         "status": "executed" if comparisons else "configurable",
+         "requires": "选择数值主指标和分组字段；至少两个组各有 2 条有效记录。只比较描述性差异。",
+         "missingFields": [label for key, label in (("measureColumn", "主指标"), ("groupColumn", "分组字段")) if not config.get(key)],
+         "result": f"已完成 {len(comparisons)} 项比较。" if comparisons else None},
+        {"method": "双分类交叉计数", "goal": "exploratory_analysis",
+         "status": "executed" if groups.get("categoryCrossTabs") else "configurable",
+         "requires": "选择分组字段；文件中还需另一列低基数分类字段，至少 8 条共同有效记录。主指标可留空。",
+         "missingFields": ["分组字段"] if not config.get("groupColumn") else [],
+         "result": f"已完成 {len(groups.get('categoryCrossTabs') or [])} 项交叉计数。" if groups.get("categoryCrossTabs") else None},
+        {"method": "时间顺序与采样检查", "goal": "trend_forecast",
+         "status": "executed" if trend else "configurable",
+         "requires": "选择时间字段和数值主指标；至少 4 个可比较时间点。当前只作描述，不生成预测。",
+         "missingFields": [label for key, label in (("timeColumn", "时间字段"), ("measureColumn", "主指标")) if not config.get(key)],
+         "result": f"已分析 {trend['comparableRows']} 个时间点。" if trend else None},
+        {"method": "连续字段线性相关", "goal": "relationship_review",
+         "status": "executed" if relationships.get("screenedPairCount") else "configurable",
+         "requires": "选择主指标；还需另一列可比较数值，至少 8 条成对有效记录。相关不等于因果。",
+         "missingFields": ["主指标"] if not config.get("measureColumn") else [],
+         "result": f"已筛查 {relationships['screenedPairCount']} 对字段。" if relationships.get("screenedPairCount") else None},
+    ]
+    future_methods = [
+        {"method": "假设检验", "requires": "明确零假设、独立/配对设计、主指标、分组、样本条件和多重比较方案；尚无执行器。"},
+        {"method": "回归建模", "requires": "明确结果与解释字段、诊断方案及独立验证；尚无执行器。"},
+        {"method": "聚类分群", "requires": "明确可比字段、缩放方案、群组稳定性和业务解释；尚无执行器。"},
+        {"method": "预测与预警", "requires": "明确时间粒度、预测目标、历史跨度、基线与回测方案；尚无执行器。"},
+        {"method": "因果评估", "requires": "明确处理、结果、时间、对照及识别假设；尚无执行器。"},
+    ]
+    iqr_screens = repair_summary.get("iqrScreening") or []
+    method_decisions = [
+        {
+            "method": "缺失、重复与分类频数", "methodCardIds": ["quality_dimensions"],
+            "status": "executed" if quality else "not_selected",
+            "result": (f"检查 {quality.get('rowCount', 0)} 行；形成 {len(quality.get('categoricalProfiles') or [])} 个分类字段画像。"
+                       if quality else "本次目标没有运行数据质量工具。"),
+            "sourceUrl": METHOD_SOURCES["categorical_frequency"],
+            "evidenceRef": stage_refs.get("quality_audit"),
+        },
+        {
+            "method": "连续数值分布", "methodCardIds": ["eda_before_model"],
+            "status": "executed" if distribution.get("fields") else "skipped",
+            "result": (f"形成 {len(distribution['fields'])} 个数值字段画像。" if distribution.get("fields")
+                       else "未运行分布工具，或没有足够的可比较数值。"),
+            "sourceUrl": METHOD_SOURCES["numeric_distribution"],
+            "evidenceRef": stage_refs.get("distribution_profile") if distribution.get("fields") else None,
+        },
+        {
+            "method": "IQR 极端值线索", "methodCardIds": ["outlier_review"],
+            "status": "executed" if any(item.get("status") == "applied" for item in iqr_screens) else "skipped",
+            "result": (f"通过适用性检查 {sum(item.get('status') == 'applied' for item in iqr_screens)} 列；其余列不套用全列阈值。"
+                       if iqr_screens else "本次没有可执行的 IQR 适用性结论。"),
+            "sourceUrl": METHOD_SOURCES["group_location_scale"],
+            "evidenceRef": stage_refs.get("distribution_profile") if any(item.get("status") == "applied" for item in iqr_screens) else None,
+        },
+        {
+            "method": "时间顺序与采样间隔", "status": "executed" if trend else "skipped",
+            "result": (f"按 {trend['timeColumn']} 分析 {trend['comparableRows']} 个可比时间点；不据此预测。"
+                       if trend else "需要明确时间字段和数值主指标，且至少有 4 个可比点。"),
+            "sourceUrl": METHOD_SOURCES["time_sequence"],
+            "evidenceRef": stage_refs.get("relationship_screen") if trend else None,
+        },
+        {
+            "method": "分组位置与离散度", "methodCardIds": ["effect_size"],
+            "status": "executed" if comparisons else "skipped",
+            "result": (f"完成 {len(comparisons)} 项描述性比较；不推断因果。" if comparisons
+                       else "需要可用分组字段、数值主指标及每组足够记录。"),
+            "sourceUrl": METHOD_SOURCES["group_location_scale"],
+            "evidenceRef": stage_refs.get("group_comparison") if comparisons else None,
+        },
+        {
+            "method": "分类交叉计数", "status": "executed" if groups.get("categoryCrossTabs") else "skipped",
+            "result": (f"完成 {len(groups['categoryCrossTabs'])} 对分类字段交叉计数；组内比例以该组有效记录为分母。"
+                       if groups.get("categoryCrossTabs") else "需要两个低基数分类字段和足够的共同有效记录。"),
+            "sourceUrl": METHOD_SOURCES["categorical_cross_tab"],
+            "evidenceRef": stage_refs.get("group_comparison") if groups.get("categoryCrossTabs") else None,
+        },
+        {
+            "method": "连续字段线性相关", "status": "executed" if relationships.get("screenedPairCount", 0) else "skipped",
+            "result": (f"成对筛查后达到展示阈值的关系 {relationships.get('candidateCount', 0)} 对；相关不等于因果。"
+                       if relationships.get("screenedPairCount", 0)
+                       else "需要至少两个可比较数值字段和足够的成对有效记录。"),
+            "sourceUrl": METHOD_SOURCES["numeric_relationship"],
+            "evidenceRef": stage_refs.get("relationship_screen") if relationships.get("screenedPairCount", 0) else None,
+        },
+        {
+            "method": "排名范围约束", "status": "executed" if ranks.get("pairCount") else "skipped",
+            "result": (f"核对 {ranks['pairCount']} 对排名与总人数列。" if ranks.get("pairCount")
+                       else "未找到可核对的排名与总人数列对。"),
+            "sourceUrl": None,
+            "evidenceRef": stage_refs.get("rank_consistency") if ranks.get("pairCount") else None,
+        },
+    ]
+    return {
+        "version": "analysis_process_v1", "stages": stages,
+        "preprocessing": {"items": preprocessing_items, "automaticMutation": False},
+        "visualizations": visuals, "extensions": extensions,
+        "futureMethods": future_methods,
+        "methodDecisions": method_decisions,
+        "boundary": "这是可扩展的数据分析主流程，不代表已执行所有统计或机器学习方法；只展示当前数据和字段条件支持的结果。",
+    }
+
+
 def _numeric_columns(frame: pd.DataFrame, excluded: Iterable[str] = ()) -> dict[str, pd.Series]:
     output: dict[str, pd.Series] = {}
     excluded_names = set(excluded)
@@ -197,10 +488,21 @@ def run_analysis_tools(
     source_row_numbers: Iterable[int] | None = None,
     repair_plan: dict[str, Any] | None = None,
     analysis_config: dict[str, Any] | None = None,
+    execute_tool_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Execute bounded local analysis and return traceable tool outputs."""
+    """Execute bounded local analysis and return traceable tool outputs.
+
+    ``execute_tool_keys`` is used only by a validated recovery run.  It
+    physically skips calculations for unaffected tools; omitted keeps the
+    historical full execution behavior unchanged.
+    """
     selected_goal = validate_analysis_goal(goal)
     selected_tools = GOAL_TOOLS[selected_goal]
+    requested_tools = set(execute_tool_keys) if execute_tool_keys is not None else set(selected_tools)
+    unknown_tools = requested_tools - set(selected_tools)
+    if unknown_tools:
+        raise ValueError("选择性重算包含本次分析目标未使用的工具")
+    active_tools = set(selected_tools) & requested_tools
     frame = pd.read_csv(StringIO(csv_text), dtype=object)
     if frame.empty:
         raise ValueError("分析工具至少需要一行数据")
@@ -213,7 +515,7 @@ def run_analysis_tools(
     recommendations: list[dict[str, Any]] = []
 
     def record_tool(key: str, label: str, payload: dict[str, Any], tool_findings: list[dict[str, Any]]) -> None:
-        if key not in selected_tools:
+        if key not in active_tools:
             return
         evidence_ref = _tool_ref(run_id, key)
         tools.append({
@@ -230,13 +532,40 @@ def run_analysis_tools(
             item["evidenceRefs"] = [evidence_ref]
             findings.append(item)
 
-    blank = frame.isna() | frame.apply(
-        lambda column: column.map(lambda value: isinstance(value, str) and not value.strip())
-    )
-    missing_by_column = {
-        str(column): int(blank[column].sum()) for column in frame.columns if int(blank[column].sum())
-    }
-    duplicate_count = int(frame.fillna("").astype(str).duplicated().sum())
+    if "quality_audit" in active_tools:
+        blank = frame.isna() | frame.apply(
+            lambda column: column.map(lambda value: isinstance(value, str) and not value.strip())
+        )
+        missing_by_column = {
+            str(column): int(blank[column].sum()) for column in frame.columns if int(blank[column].sum())
+        }
+        duplicate_count = int(frame.fillna("").astype(str).duplicated().sum())
+        missing_cell_count = int(blank.to_numpy().sum())
+        categorical_profiles: list[dict[str, Any]] = []
+        for column in frame.columns:
+            if _is_identifier(column) or column in {config["identifierColumn"], config["timeColumn"]}:
+                continue
+            nonblank = frame.loc[~blank[column], column].astype(str).str.strip()
+            if len(nonblank) < 4 or pd.to_numeric(nonblank, errors="coerce").notna().mean() >= 0.8:
+                continue
+            counts = nonblank.value_counts()
+            if not 2 <= len(counts) <= 20 or len(counts) > len(nonblank) / 2:
+                continue
+            categorical_profiles.append({
+                "column": str(column), "validCount": int(len(nonblank)),
+                "missingCount": int(blank[column].sum()), "categoryCount": int(len(counts)),
+                "frequencies": [
+                    {"label": str(label), "count": int(count),
+                     "sharePct": _finite(100 * count / len(nonblank))}
+                    for label, count in counts.head(8).items()
+                ],
+                "truncated": len(counts) > 8,
+            })
+    else:
+        missing_by_column = {}
+        duplicate_count = 0
+        missing_cell_count = 0
+        categorical_profiles = []
     quality_findings: list[dict[str, Any]] = []
     if missing_by_column:
         worst_column, worst_count = max(missing_by_column.items(), key=lambda item: item[1])
@@ -261,22 +590,33 @@ def run_analysis_tools(
         {
             "rowCount": int(len(frame)),
             "columnCount": int(len(frame.columns)),
-            "missingCellCount": int(blank.to_numpy().sum()),
+            "missingCellCount": missing_cell_count,
             "missingByColumn": missing_by_column,
             "duplicateRowCount": duplicate_count,
+            "categoricalProfiles": categorical_profiles[:12],
         },
         quality_findings,
     )
 
-    numeric = _numeric_columns(frame, [config["identifierColumn"]] if config["identifierColumn"] else [])
-    if config["measureColumn"] and config["measureColumn"] not in numeric:
+    numeric_needed = bool(active_tools & {"distribution_profile", "relationship_screen", "group_comparison"})
+    numeric = (
+        _numeric_columns(frame, [config["identifierColumn"]] if config["identifierColumn"] else [])
+        if numeric_needed else {}
+    )
+    if numeric_needed and config["measureColumn"] and config["measureColumn"] not in numeric:
         raise ValueError("选择的主指标不是可分析的数值字段（至少需要 4 个有效数值）")
     distribution_fields: list[dict[str, Any]] = []
     distribution_findings: list[dict[str, Any]] = []
     distribution_numeric = (
         {config["measureColumn"]: numeric[config["measureColumn"]]}
-        if config["measureColumn"] else numeric
+        if config["measureColumn"] and "distribution_profile" in active_tools
+        else numeric if "distribution_profile" in active_tools else {}
     )
+    iqr_policy = {
+        item["column"]: item
+        for item in (repair_plan or {}).get("summary", {}).get("iqrScreening", [])
+        if item.get("column")
+    }
     for column, series in distribution_numeric.items():
         values = series.dropna().astype(float)
         if len(values) < 4:
@@ -284,7 +624,18 @@ def run_analysis_tools(
         q1 = float(values.quantile(0.25))
         q3 = float(values.quantile(0.75))
         iqr = q3 - q1
-        outlier_mask = ((series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)) if iqr > 0 else pd.Series(False, index=series.index)
+        assessment = iqr_policy.get(column)
+        if is_derived_rate(column):
+            assessment = {"status": "skipped", "method": "IQR_3.0", "reason": "比率或变化率需先核对分子、分母和计算口径，不做全列 IQR 判错。"}
+            outlier_mask = pd.Series(False, index=series.index)
+        elif repair_plan is not None:
+            outlier_mask = (
+                (series < assessment["lowerBound"]) | (series > assessment["upperBound"])
+                if assessment and assessment.get("status") == "applied"
+                else pd.Series(False, index=series.index)
+            )
+        else:
+            outlier_mask = ((series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)) if iqr > 0 else pd.Series(False, index=series.index)
         outlier_rows = [
             {
                 "sheet": sheet,
@@ -304,6 +655,8 @@ def run_analysis_tools(
             "q3": _finite(q3),
             "outlierCount": int(outlier_mask.fillna(False).sum()),
             "outlierLocations": outlier_rows,
+            "iqrScreening": assessment or {"status": "legacy", "method": "IQR_1.5"},
+            "histogram": _histogram(values),
         }
         distribution_fields.append(field)
         if field["outlierCount"]:
@@ -311,7 +664,7 @@ def run_analysis_tools(
                 "type": "distribution_outlier",
                 "title": f"“{column}”有 {field['outlierCount']} 个统计异常候选",
                 "severity": "review",
-                "explanation": "按 1.5×IQR 规则筛出，仅表示需要核对，不等于数据错误。",
+                "explanation": "按本次适用性检查后的 3×IQR 极端值规则筛出，仅表示需要核对，不等于数据错误。" if repair_plan is not None else "按 1.5×IQR 规则筛出，仅表示需要核对，不等于数据错误。",
                 "details": field,
             })
     record_tool(
@@ -323,7 +676,9 @@ def run_analysis_tools(
 
     rank_checks: list[dict[str, Any]] = []
     rank_findings: list[dict[str, Any]] = []
-    for rank_column, total_column in _rank_total_pairs(frame.columns):
+    for rank_column, total_column in (
+        _rank_total_pairs(frame.columns) if "rank_consistency" in active_tools else []
+    ):
         ranks = pd.to_numeric(frame[rank_column], errors="coerce")
         totals = pd.to_numeric(frame[total_column], errors="coerce")
         comparable = ranks.notna() & totals.notna()
@@ -356,8 +711,12 @@ def run_analysis_tools(
     )
 
     correlations: list[dict[str, Any]] = []
-    relationship_numeric = _relationship_numeric_columns(
-        frame, [config["identifierColumn"]] if config["identifierColumn"] else [],
+    screened_pairs = 0
+    relationship_numeric = (
+        _relationship_numeric_columns(
+            frame, [config["identifierColumn"]] if config["identifierColumn"] else [],
+        )
+        if "relationship_screen" in active_tools else {}
     )
     numeric_names = list(relationship_numeric)
     if len(frame) >= 8:
@@ -370,6 +729,7 @@ def run_analysis_tools(
             paired = pd.concat([relationship_numeric[left], relationship_numeric[right]], axis=1).dropna()
             if len(paired) < 8 or paired.iloc[:, 0].nunique() < 2 or paired.iloc[:, 1].nunique() < 2:
                 continue
+            screened_pairs += 1
             coefficient = float(paired.iloc[:, 0].corr(paired.iloc[:, 1]))
             if math.isfinite(coefficient) and abs(coefficient) >= 0.5:
                 correlations.append({
@@ -390,7 +750,7 @@ def run_analysis_tools(
         for item in correlations[:5]
     ]
     trend_summary: dict[str, Any] | None = None
-    if config["timeColumn"] and config["measureColumn"]:
+    if "relationship_screen" in active_tools and config["timeColumn"] and config["measureColumn"]:
         time_values = frame[config["timeColumn"]]
         numeric_time = pd.to_numeric(time_values, errors="coerce")
         if float(numeric_time.notna().mean()) >= 0.8:
@@ -408,6 +768,34 @@ def run_analysis_tools(
             last_value = float(prepared.iloc[-1]["measure"])
             change = last_value - first_value
             change_pct = None if first_value == 0 else change / abs(first_value) * 100
+            sample_indexes = sorted(set(
+                [round(index * (len(prepared) - 1) / min(len(prepared) - 1, 59)) for index in range(min(len(prepared), 60))]
+                if len(prepared) > 1 else [0]
+            ))
+            trend_points = []
+            for index in sample_indexes:
+                time_value = prepared.iloc[index]["time"]
+                label = time_value.isoformat() if hasattr(time_value, "isoformat") else str(time_value)
+                trend_points.append({"label": label, "value": _finite(prepared.iloc[index]["measure"])})
+            cadence: dict[str, Any] = {
+                "validTimeCount": int(sortable_time.notna().sum()),
+                "missingOrInvalidTimeCount": int(sortable_time.isna().sum()),
+                "duplicateTimeCount": int(prepared["time"].duplicated().sum()),
+                "regularCadence": False,
+                "gapCandidateCount": 0,
+            }
+            if time_method == "datetime_order":
+                intervals = prepared["time"].drop_duplicates().diff().dt.total_seconds().dropna()
+                positive = intervals[intervals > 0]
+                if len(positive) >= 6:
+                    median_interval = float(positive.median())
+                    regular = float(((positive - median_interval).abs() <= 0.05 * median_interval).mean()) >= 0.8
+                    cadence.update({
+                        "regularCadence": regular,
+                        "medianIntervalSeconds": _finite(median_interval),
+                        "largestIntervalSeconds": _finite(positive.max()),
+                        "gapCandidateCount": int((positive > 2 * median_interval).sum()) if regular else 0,
+                    })
             trend_summary = {
                 "timeColumn": config["timeColumn"],
                 "measureColumn": config["measureColumn"],
@@ -417,6 +805,8 @@ def run_analysis_tools(
                 "absoluteChange": _finite(change),
                 "changePct": _finite(change_pct) if change_pct is not None else None,
                 "method": time_method,
+                "cadence": cadence,
+                "points": trend_points,
             }
             pct_text = "起始值为 0，变化率不适用" if change_pct is None else f"变化率 {change_pct:.2f}%"
             correlation_findings.append({
@@ -429,6 +819,14 @@ def run_analysis_tools(
                 ),
                 "details": trend_summary,
             })
+            if cadence["gapCandidateCount"]:
+                correlation_findings.append({
+                    "type": "time_gap_candidate",
+                    "title": f"“{config['timeColumn']}”有 {cadence['gapCandidateCount']} 个采样间隔线索",
+                    "severity": "review",
+                    "explanation": "按本文件主要采样间隔比较得到；可能是计划停采或工况变化，不等于记录缺失。",
+                    "details": {"timeColumn": config["timeColumn"], **cadence},
+                })
     relationship_blocker = None
     if len(frame) < 8:
         relationship_blocker = "有效记录少于 8 行，不能进行稳定的字段关联筛查。"
@@ -446,6 +844,7 @@ def run_analysis_tools(
             "eligibleFieldCount": len(numeric_names),
             "eligibleFields": numeric_names[:30],
             "candidateCount": len(correlations),
+            "screenedPairCount": screened_pairs,
             "candidates": correlations[:10],
             "timeTrend": trend_summary,
             "blockedReason": relationship_blocker,
@@ -454,7 +853,8 @@ def run_analysis_tools(
     )
 
     group_comparisons: list[dict[str, Any]] = []
-    if len(frame) >= 8 and numeric:
+    category_cross_tabs: list[dict[str, Any]] = []
+    if "group_comparison" in active_tools and len(frame) >= 8 and numeric:
         categories = []
         if config["groupColumn"]:
             categories = [config["groupColumn"]]
@@ -474,7 +874,7 @@ def run_analysis_tools(
                     "measure": numeric[measure],
                 }).dropna()
                 prepared = prepared[prepared["category"] != ""]
-                groups = prepared.groupby("category")["measure"].agg(["count", "mean"])
+                groups = prepared.groupby("category")["measure"].agg(["count", "mean", "median", "std"])
                 groups = groups[groups["count"] >= 2].sort_values("mean", ascending=False)
                 if len(groups) < 2:
                     continue
@@ -485,13 +885,48 @@ def run_analysis_tools(
                     "measureColumn": measure,
                     "highestGroup": str(groups.index[0]),
                     "highestMean": _finite(high["mean"]),
+                    "highestMedian": _finite(high["median"]),
+                    "highestStd": _finite(high["std"]),
                     "highestCount": int(high["count"]),
                     "lowestGroup": str(groups.index[-1]),
                     "lowestMean": _finite(low["mean"]),
+                    "lowestMedian": _finite(low["median"]),
+                    "lowestStd": _finite(low["std"]),
                     "lowestCount": int(low["count"]),
                     "meanGap": _finite(float(high["mean"] - low["mean"])),
                     "groupCount": int(len(groups)),
                 })
+    if "group_comparison" in active_tools and len(frame) >= 8:
+        category_columns: list[str] = []
+        for column in frame.columns:
+            if _is_identifier(column) or column in {config["identifierColumn"], config["timeColumn"], config["measureColumn"]}:
+                continue
+            values = frame[column].dropna().astype(str).str.strip()
+            values = values[values != ""]
+            if len(values) < 8 or pd.to_numeric(values, errors="coerce").notna().mean() >= 0.8 and column != config["groupColumn"]:
+                continue
+            if 2 <= values.nunique() <= 10:
+                category_columns.append(str(column))
+        if config["groupColumn"] in category_columns:
+            pairs = [(config["groupColumn"], other) for other in category_columns if other != config["groupColumn"]]
+        else:
+            pairs = [(left, right) for index, left in enumerate(category_columns) for right in category_columns[index + 1:]]
+        for left, right in pairs[:2]:
+            prepared = frame[[left, right]].dropna().astype(str).apply(lambda series: series.str.strip())
+            prepared = prepared[(prepared[left] != "") & (prepared[right] != "")]
+            if len(prepared) < 8 or prepared[left].nunique() < 2 or prepared[right].nunique() < 2:
+                continue
+            counts = pd.crosstab(prepared[left], prepared[right])
+            cells = [
+                {"row": str(row), "column": str(column), "count": int(count),
+                 "rowSharePct": _finite(100 * count / counts.loc[row].sum())}
+                for row in counts.index for column, count in counts.loc[row].items()
+            ]
+            category_cross_tabs.append({
+                "rowColumn": left, "columnColumn": right, "pairedRows": int(len(prepared)),
+                "rowCategoryCount": int(len(counts.index)), "columnCategoryCount": int(len(counts.columns)),
+                "cells": cells[:20], "truncated": len(cells) > 20,
+            })
     group_comparisons.sort(key=lambda item: abs(item["meanGap"] or 0), reverse=True)
     group_findings = [
         {
@@ -500,7 +935,9 @@ def run_analysis_tools(
             "severity": "info",
             "explanation": (
                 f"当前样本中“{item['highestGroup']}”均值 {item['highestMean']:.2f}，"
-                f"“{item['lowestGroup']}”均值 {item['lowestMean']:.2f}；该差异未经显著性或混杂因素检验。"
+                f"“{item['lowestGroup']}”均值 {item['lowestMean']:.2f}；"
+                f"两组中位数分别为 {item['highestMedian']:.2f}、{item['lowestMedian']:.2f}。"
+                "该差异未经显著性或混杂因素检验。"
             ),
             "details": item,
         }
@@ -509,13 +946,14 @@ def run_analysis_tools(
     record_tool(
         "group_comparison",
         "分组差异探索",
-        {"comparisonCount": len(group_comparisons), "comparisons": group_comparisons[:10]},
+        {"comparisonCount": len(group_comparisons), "comparisons": group_comparisons[:10],
+         "categoryCrossTabs": category_cross_tabs},
         group_findings,
     )
 
     repair_summary = (repair_plan or {}).get("summary") or {}
     repair_ref = next((tool["evidenceRef"] for tool in tools if tool["key"] == "quality_audit"), "")
-    if "quality_audit" in selected_tools and repair_summary.get("safeFixCount", 0):
+    if "quality_audit" in active_tools and repair_summary.get("safeFixCount", 0):
         recommendations.append({
             "priority": "high",
             "action": "先预览并导出安全修正版",
@@ -523,7 +961,7 @@ def run_analysis_tools(
             "evidenceRefs": [repair_ref],
             "automatic": False,
         })
-    if "quality_audit" in selected_tools and repair_summary.get("reviewCount", 0):
+    if "quality_audit" in active_tools and repair_summary.get("reviewCount", 0):
         recommendations.append({
             "priority": "high",
             "action": "按单元格位置核对人工复核项",
@@ -531,7 +969,7 @@ def run_analysis_tools(
             "evidenceRefs": [repair_ref],
             "automatic": False,
         })
-    if "relationship_screen" in selected_tools and correlations:
+    if "relationship_screen" in active_tools and correlations:
         recommendations.append({
             "priority": "medium",
             "action": "围绕高相关字段补做业务验证",
@@ -539,7 +977,7 @@ def run_analysis_tools(
             "evidenceRefs": [_tool_ref(run_id, "relationship_screen")],
             "automatic": False,
         })
-    if "group_comparison" in selected_tools and group_comparisons:
+    if "group_comparison" in active_tools and group_comparisons:
         recommendations.append({
             "priority": "medium",
             "action": "复核分组口径并比较样本量",
@@ -567,24 +1005,31 @@ def run_analysis_tools(
             "automatic": False,
         })
 
-    priority_refs = {_tool_ref(run_id, key) for key in selected_tools}
+    priority_refs = {_tool_ref(run_id, key) for key in active_tools}
     findings.sort(key=lambda item: (
         item["evidenceRefs"][0] not in priority_refs,
         {"high": 0, "medium": 1, "review": 2, "info": 3}.get(item["severity"], 4),
     ))
     findings = findings[:MAX_TOOL_FINDINGS]
-    return {
+    output = {
         "version": "local_analysis_tools_v1",
         "goal": selected_goal,
         "goalLabel": ANALYSIS_GOALS[selected_goal],
         "analysisConfig": config,
         "summary": {
             "executedToolCount": len(tools),
+            "actuallyExecutedToolCount": len(tools),
+            "reusedToolCount": 0,
             "findingCount": len(findings),
             "recommendationCount": len(recommendations),
             "rowCount": int(len(frame)),
         },
         "executedTools": tools,
+        "execution": {
+            "mode": "selected" if execute_tool_keys is not None else "full",
+            "executedToolKeys": [tool["key"] for tool in tools],
+            "reusedToolKeys": [],
+        },
         "findings": findings,
         "recommendations": recommendations[:5],
         "limitations": [
@@ -599,6 +1044,8 @@ def run_analysis_tools(
             "categoryValuesSentToProvider": False,
         },
     }
+    output["analysisProcess"] = build_analysis_process(output, repair_plan)
+    return output
 
 
 def provider_safe_tool_results(results: dict[str, Any]) -> dict[str, Any]:
@@ -632,13 +1079,20 @@ def provider_safe_tool_results(results: dict[str, Any]) -> dict[str, Any]:
                 ],
             }
         elif tool.get("key") == "relationship_screen":
+            time_trend = payload.get("timeTrend") or {}
             safe_payload = {
                 "method": payload.get("method"),
                 "eligibleFieldCount": payload.get("eligibleFieldCount"),
                 "eligibleFields": payload.get("eligibleFields", [])[:30],
                 "candidateCount": payload.get("candidateCount"),
+                "screenedPairCount": payload.get("screenedPairCount"),
                 "candidates": payload.get("candidates", [])[:10],
-                "timeTrend": payload.get("timeTrend"),
+                "timeTrend": {
+                    key: time_trend.get(key) for key in (
+                        "timeColumn", "measureColumn", "comparableRows", "firstValue",
+                        "lastValue", "absoluteChange", "changePct", "method", "cadence",
+                    )
+                } if time_trend else None,
                 "blockedReason": payload.get("blockedReason"),
             }
         else:
@@ -647,7 +1101,8 @@ def provider_safe_tool_results(results: dict[str, Any]) -> dict[str, Any]:
                 "comparisons": [
                     {key: item.get(key) for key in (
                         "categoryColumn", "measureColumn", "highestMean", "highestCount",
-                        "lowestMean", "lowestCount", "meanGap", "groupCount",
+                        "highestMedian", "highestStd", "lowestMean", "lowestCount",
+                        "lowestMedian", "lowestStd", "meanGap", "groupCount",
                     )}
                     for item in payload.get("comparisons", [])[:10]
                 ],

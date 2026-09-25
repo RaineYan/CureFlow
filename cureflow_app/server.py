@@ -1,7 +1,7 @@
 """Local-only HTTP API used by the CureFlow desktop application.
 
-The server binds to 127.0.0.1 and uses the existing offline workflow. It never
-accepts or persists an API key. Recovery comparison data is read from the
+The server binds to 127.0.0.1. Explicitly opted-in same-origin loopback setup
+may accept a session key into memory, never persistent storage. Recovery comparison data is read from the
 frozen EXP-02 mock evidence and is labelled as such in every response.
 """
 from __future__ import annotations
@@ -11,9 +11,11 @@ import base64
 import binascii
 import csv
 import hashlib
+import hmac
 import json
 import os
 import re
+import socket
 import sys
 import traceback
 from datetime import date, datetime, time, timezone
@@ -39,13 +41,19 @@ from artifacts import Artifact, ArtifactStore, ArtifactType  # noqa: E402
 from llm import default_workflow_llm  # noqa: E402
 from llm.task_router import TaskAwareLLMClient  # noqa: E402
 from cureflow_app.provider_runtime import (  # noqa: E402
+    DEEPSEEK_MODE,
+    DOUBAO_MODE,
     OFFLINE_MODE,
+    OPENAI_MODE,
+    QWEN_MODE,
     DesktopProviderError,
     DesktopProviderRuntime,
     ProviderRun,
     estimated_list_price_usd,
     write_private_live_audit,
 )
+from cureflow_app.key_store import KeyStore, KeyStoreError  # noqa: E402
+from cureflow_app.local_provider_setup import _PROVIDERS, restore_persisted_keys  # noqa: E402
 from validation.claim_grounding import (  # noqa: E402
     audit_claim_grounding,
     summarize_grounding,
@@ -63,12 +71,17 @@ from workflow.repair_analysis import (  # noqa: E402
 )
 from workflow.analysis_tools import (  # noqa: E402
     ANALYSIS_GOALS,
+    build_analysis_process,
     provider_safe_tool_results,
     run_analysis_tools,
     validate_analysis_config,
     validate_analysis_goal,
 )
-from workflow.current_recovery import build_current_recovery_plan  # noqa: E402
+from workflow.current_recovery import (  # noqa: E402
+    build_current_recovery_plan,
+    impacted_tool_keys_for_issue_types,
+)
+from workflow.current_impact import build_current_impact_report  # noqa: E402
 from workflow.domain_knowledge import (  # noqa: E402
     provider_safe_method_pack,
     select_method_pack,
@@ -485,13 +498,50 @@ def inspect_tabular_input(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def list_repair_issues(body: dict[str, Any]) -> dict[str, Any]:
+    """Page through exact source-cell review hints without a provider call."""
+    csv_text, _, metadata, _ = _analysis_input(body)
+    if body.get("inputFingerprint") != metadata["inputFingerprint"]:
+        raise ApiInputError("文件内容已变化，请重新分析后复核")
+    offset, limit = body.get("offset", 0), body.get("limit", 40)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 1000000:
+        raise ApiInputError("问题页码无效")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ApiInputError("每页问题数量无效")
+    issue_type, column = body.get("issueType"), body.get("column")
+    if issue_type is not None and (not isinstance(issue_type, str) or len(issue_type) > 80):
+        raise ApiInputError("问题类型无效")
+    if column is not None and (not isinstance(column, str) or len(column) > 200):
+        raise ApiInputError("字段筛选无效")
+    plan = build_repair_plan(
+        csv_text, filename=metadata["filename"], sheet=metadata.get("sheet"),
+        source_row_numbers=metadata.get("sourceRowNumbers"),
+        analysis_config=body.get("analysisConfig"),
+        issue_offset=offset, issue_limit=limit,
+        issue_type_filter=issue_type, column_filter=column,
+    )
+    matching = plan["summary"]["matchingIssueCount"]
+    return {
+        "source": {"filename": metadata["filename"], "sheet": metadata.get("sheet"),
+                   "inputFingerprint": metadata["inputFingerprint"]},
+        "summary": plan["summary"], "issues": plan["issues"],
+        "offset": offset, "limit": limit,
+        "nextOffset": offset + limit if offset + limit < matching else None,
+        "providerUsed": False,
+    }
+
+
 def export_repaired_copy(body: dict[str, Any]) -> dict[str, Any]:
     """Apply user-approved exact cell replacements to a new copy only."""
     csv_text, _, metadata, _ = _analysis_input(body)
+    if body.get("inputFingerprint") and body["inputFingerprint"] != metadata["inputFingerprint"]:
+        raise ApiInputError("文件内容已变化，请重新分析后复核")
     approved_ids = body.get("approvedFixIds", [])
     manual_input = body.get("manualCorrections", [])
     if not isinstance(approved_ids, list):
         raise ApiInputError("安全修正项必须是列表")
+    if not isinstance(manual_input, list) or len(approved_ids) + len(manual_input) > 250:
+        raise ApiInputError("一次最多确认 250 项修正，请分批处理")
     if not approved_ids and not manual_input:
         raise ApiInputError("请至少选择一项安全修正或填写一项人工确认值")
     plan = build_repair_plan(
@@ -499,6 +549,8 @@ def export_repaired_copy(body: dict[str, Any]) -> dict[str, Any]:
         filename=metadata["filename"],
         sheet=metadata.get("sheet"),
         source_row_numbers=metadata.get("sourceRowNumbers"),
+        analysis_config=body.get("analysisConfig"),
+        include_issue_ids=[*approved_ids, *(entry.get("issueId") for entry in manual_input if isinstance(entry, dict))],
     )
     try:
         safe_fixes = approved_safe_fixes(plan, approved_ids)
@@ -550,7 +602,61 @@ def export_repaired_copy(body: dict[str, Any]) -> dict[str, Any]:
         "safeFixesApplied": len(safe_fixes),
         "sourceFileModified": False,
         "manualReviewItemsApplied": len(manual_fixes),
+        "appliedIssueTypes": sorted({str(fix.get("type") or "unknown") for fix in fixes}),
     }
+    return response
+
+
+def _authorize_recovery_copy(
+    body: dict[str, Any], response: dict[str, Any], data_dir: Path,
+) -> dict[str, Any]:
+    """Bind an exported copy to its source run without storing table rows."""
+    source_run_id = body.get("sourceRunId")
+    if not source_run_id:
+        return response
+    if not isinstance(source_run_id, str) or len(source_run_id) > 160:
+        raise ApiInputError("来源运行编号无效")
+    store = ArtifactStore(base_dir=str(data_dir / "artifacts"))
+    store.reload()
+    manifest = store.get(source_run_id, "analysis_tools_manifest")
+    source_fingerprint = (response.get("audit") or {}).get("inputFingerprint")
+    if manifest is None or manifest.meta.get("input_fingerprint") != source_fingerprint:
+        raise ApiInputError("修正副本与来源运行不一致，请重新分析后修正")
+    corrected_body = {
+        "filename": response["filename"],
+        "selectedSheet": body.get("selectedSheet"),
+        **({"xlsxBase64": response["xlsxBase64"]} if response.get("xlsxBase64") else {"csvText": response["csvText"]}),
+    }
+    _, _, corrected_metadata, _ = _analysis_input(corrected_body)
+    token_material = "\n".join([
+        source_run_id,
+        str(source_fingerprint),
+        corrected_metadata["inputFingerprint"],
+        *[
+            *(response["audit"].get("appliedFixIds") or []),
+            *(response["audit"].get("manualCorrectionIds") or []),
+        ],
+    ])
+    token = hashlib.sha256(token_material.encode("utf-8")).hexdigest()[:32]
+    record = {
+        "version": "desktop_recovery_authorization_v1",
+        "sourceRunId": source_run_id,
+        "sourceInputFingerprint": source_fingerprint,
+        "correctedInputFingerprint": corrected_metadata["inputFingerprint"],
+        "appliedIssueIds": [
+            *(response["audit"].get("appliedFixIds") or []),
+            *(response["audit"].get("manualCorrectionIds") or []),
+        ],
+        "appliedIssueTypes": response["audit"].get("appliedIssueTypes") or [],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "containsRawRows": False,
+    }
+    authorization_dir = data_dir / "recovery_authorizations"
+    authorization_dir.mkdir(parents=True, exist_ok=True)
+    with open(authorization_dir / f"{token}.json", "w", encoding="utf-8") as handle:
+        json.dump(record, handle, ensure_ascii=False, indent=2)
+    response["audit"]["recoveryToken"] = token
+    response["audit"]["correctedInputFingerprint"] = corrected_metadata["inputFingerprint"]
     return response
 
 
@@ -566,6 +672,8 @@ def preview_repaired_copy(body: dict[str, Any]) -> dict[str, Any]:
         filename=source_metadata["filename"],
         sheet=source_metadata.get("sheet"),
         source_row_numbers=source_metadata.get("sourceRowNumbers"),
+        analysis_config=body.get("analysisConfig"),
+        include_issue_ids=[*(body.get("approvedFixIds") or []), *(entry.get("issueId") for entry in (body.get("manualCorrections") or []) if isinstance(entry, dict))],
     )
     repaired = export_repaired_copy(body)
     corrected_body: dict[str, Any] = {
@@ -582,6 +690,7 @@ def preview_repaired_copy(body: dict[str, Any]) -> dict[str, Any]:
         filename=corrected_metadata["filename"],
         sheet=corrected_metadata.get("sheet"),
         source_row_numbers=corrected_metadata.get("sourceRowNumbers"),
+        analysis_config=body.get("analysisConfig"),
     )
 
     def issue_key(issue: dict[str, Any]) -> tuple[str, str | None, str]:
@@ -726,7 +835,11 @@ def _normalize_interpretation_contract(payload: dict[str, Any]) -> dict[str, Any
     adapter accepts only that exact legacy shape and still sends its references
     through the same evidence whitelist validator.
     """
-    if "summary" in payload:
+    # A few providers return both contracts but leave ``summary`` null or blank.
+    # Treat that as an incomplete rich contract so the valid compact contract can
+    # still be normalized.  A non-empty rich summary keeps taking precedence.
+    summary = payload.get("summary")
+    if isinstance(summary, str) and summary.strip():
         return payload
     claim_text = payload.get("claim_text")
     evidence_refs = payload.get("evidence_refs")
@@ -756,6 +869,100 @@ def _normalize_interpretation_contract(payload: dict[str, Any]) -> dict[str, Any
         "limitations": [
             "Provider 本次返回紧凑证据结论，未单独生成行动建议；结论仍需人工复核。"
         ],
+    }
+
+
+def _provider_error_from_payload(
+    payload: dict[str, Any], provider: str,
+) -> str | None:
+    """Turn a provider error envelope into a useful, secret-safe UI message."""
+    if "summary" in payload or "claim_text" in payload:
+        return None
+    error = payload.get("error")
+    message = payload.get("message")
+    if not isinstance(error, str) or not error.strip():
+        return None
+    labels = {
+        "openai": "OpenAI",
+        "qwen": "Qwen",
+        "deepseek": "DeepSeek",
+        "doubao": "豆包 · 火山方舟",
+    }
+    guidance = {
+        "AUTH_ERROR": "鉴权失败，请检查 API key、项目权限或密钥是否已失效",
+        "RATE_LIMIT": "请求受限，请检查额度、计费状态或稍后重试",
+        "TIMEOUT": "响应超时，请检查网络后重试",
+        "NETWORK_ERROR": "网络连接失败，请检查运行服务电脑的网络",
+        "INVALID_RESPONSE": "返回内容无法读取，请重试或更换模型",
+        "SCHEMA_ERROR": "返回结构不符合模型接口要求，请重试或更换模型",
+    }
+    provider_label = labels.get(provider, provider or "模型")
+    hint = guidance.get(error.strip(), "调用失败，请检查模型配置后重试")
+    if error.strip() == "AUTH_ERROR":
+        source = (
+            "OpenAI Platform 项目生成的有效 API Key"
+            if provider == "openai"
+            else f"{provider_label} 控制台生成的有效 API Key"
+        )
+        return f"{provider_label} {hint}；请使用{source}"
+    detail = " ".join(message.split())[:240] if isinstance(message, str) else ""
+    detail = re.sub(r"sk-[A-Za-z0-9_*.-]{4,}", "<密钥已隐藏>", detail)
+    return f"{provider_label} {hint}" + (f"（接口信息：{detail}）" if detail else "")
+
+
+_PROVIDER_PROBE_MODES = {
+    "openai": OPENAI_MODE,
+    "qwen": QWEN_MODE,
+    "deepseek": DEEPSEEK_MODE,
+    "doubao": DOUBAO_MODE,
+}
+
+
+def probe_provider_connection(
+    runtime: DesktopProviderRuntime, payload: object,
+) -> dict[str, Any]:
+    """Verify credentials/model access with one fixed, data-free model call."""
+    if not isinstance(payload, dict) or set(payload) != {"provider", "confirmProbe"}:
+        raise DesktopProviderError("连接验证格式不正确")
+    provider = payload.get("provider")
+    if provider not in _PROVIDER_PROBE_MODES:
+        raise DesktopProviderError("不支持的模型服务")
+    if payload.get("confirmProbe") is not True:
+        raise DesktopProviderError("请明确确认发起一次连接验证调用")
+    provider_run = runtime.resolve(
+        mode=_PROVIDER_PROBE_MODES[provider],
+        confirm_live=True,
+        confirm_max_calls=6,
+    )
+    evidence_ref = "connection_probe/fixed@v1"
+    prompt = (
+        "这是 CureFlow 连接验证，不包含用户文件或业务数据。"
+        "只输出 JSON："
+        '{"claim_text":"连接验证成功","evidence_refs":["connection_probe/fixed@v1"],'
+        '"confidence":1.0}。不得输出其他字段。'
+    )
+    response = provider_run.client.generate(
+        prompt, task_name="provider_connection_probe"
+    )
+    parsed = _parse_interpretation_payload(response.text)
+    provider_error = _provider_error_from_payload(parsed, provider)
+    if provider_error:
+        runtime.record_connection_error(provider, provider_error)
+        raise DesktopProviderError(provider_error)
+    _validate_interpretation(
+        _normalize_interpretation_contract(parsed), {evidence_ref}
+    )
+    runtime.mark_verified(provider)
+    return {
+        "ok": True,
+        "provider": provider,
+        "model": provider_run.model,
+        "message": "连接验证成功，可开始分析",
+        "probeContainsUserData": False,
+        "callsStarted": 1,
+        "usageType": response.usage_type.value,
+        "latencyMs": response.latency_ms,
+        "status": runtime.status(),
     }
 
 
@@ -858,6 +1065,7 @@ _INTERNAL_REPORT_TERMS = {
 
 _ANALYSIS_GOAL_QUESTIONS = {
     "auto": "这份数据有哪些值得关注的问题？",
+    "exploratory_analysis": "这份数据经过完整分析后说明了什么？",
     "data_quality": "数据可靠吗？",
     "score_audit": "成绩与排名是否一致？",
     "business_review": "经营数据说明了什么？",
@@ -1104,6 +1312,9 @@ def _interpret_generic_with_provider(
         '"actions":[{"action":"...","reason":"...","evidenceRefs":["..."]}],'
         '"limitations":["..."],"claim_text":"与 summary 相同",'
         '"evidence_refs":["findings 使用过的证据引用"],"confidence":0.0}。'
+        "如果输出完整结构，summary 必须是非空字符串；不要输出 null、空字符串或只含空格的 summary。"
+        "如果只能输出紧凑合同，则只输出 claim_text、evidence_refs、confidence 三个字段，"
+        "不要额外输出空 summary。"
         "summary 限 300 个汉字；findings 最多 3 项；actions 最多 3 项。"
         "每个 finding 和 action 至少引用一个原样 evidenceRefs；只能使用输入中出现的证据引用。"
         "建议只能表述为核对、补数、清洗或进一步分析，不得冒充已证实结论。\n"
@@ -1114,6 +1325,9 @@ def _interpret_generic_with_provider(
             prompt, task_name="generic_table_evidence_interpretation"
         )
         parsed = _parse_interpretation_payload(response.text)
+        provider_error = _provider_error_from_payload(parsed, provider_run.provider)
+        if provider_error:
+            raise ApiInputError(provider_error)
         interpretation = _validate_interpretation(
             _normalize_interpretation_contract(parsed), known_evidence
         )
@@ -1200,6 +1414,161 @@ def _interpret_generic_with_provider(
     return result
 
 
+def _validated_recovery_source(
+    *,
+    data_dir: Path,
+    recovery_context: Any,
+    analysis_goal: str,
+    analysis_config: dict[str, Any] | None,
+    current_input_fingerprint: str,
+) -> dict[str, Any] | None:
+    """Load and validate the exact prior local-tool run selected for reuse."""
+    if recovery_context in (None, {}):
+        return None
+    if not isinstance(recovery_context, dict):
+        raise ApiInputError("recoveryContext 必须是对象")
+    source_run_id = recovery_context.get("sourceRunId")
+    source_fingerprint = recovery_context.get("sourceInputFingerprint")
+    applied_issue_ids = recovery_context.get("appliedIssueIds")
+    if not isinstance(source_run_id, str) or not source_run_id or len(source_run_id) > 160:
+        raise ApiInputError("选择性恢复缺少有效的来源运行编号")
+    if not isinstance(source_fingerprint, str) or len(source_fingerprint) != 64:
+        raise ApiInputError("选择性恢复缺少有效的来源输入指纹")
+    if not isinstance(applied_issue_ids, list) or not applied_issue_ids:
+        raise ApiInputError("选择性恢复缺少已确认修正项")
+    if len(applied_issue_ids) > 250 or any(not isinstance(item, str) for item in applied_issue_ids):
+        raise ApiInputError("选择性恢复的修正项无效")
+    if source_fingerprint == current_input_fingerprint:
+        raise ApiInputError("修正版内容未发生变化，不能执行恢复复测")
+
+    token_material = "\n".join([
+        source_run_id,
+        source_fingerprint,
+        current_input_fingerprint,
+        *applied_issue_ids,
+    ])
+    recovery_token = hashlib.sha256(token_material.encode("utf-8")).hexdigest()[:32]
+    authorization_path = data_dir / "recovery_authorizations" / f"{recovery_token}.json"
+    if not authorization_path.is_file():
+        raise ApiInputError("修正版授权不存在或已失效，请重新生成修正版")
+    try:
+        with open(authorization_path, "r", encoding="utf-8") as handle:
+            authorization = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ApiInputError("修正版授权无法读取，请重新生成修正版") from exc
+    if (
+        authorization.get("sourceRunId") != source_run_id
+        or authorization.get("sourceInputFingerprint") != source_fingerprint
+        or authorization.get("correctedInputFingerprint") != current_input_fingerprint
+        or authorization.get("appliedIssueIds") != applied_issue_ids
+    ):
+        raise ApiInputError("修正版、来源运行与修正记录不一致，已拒绝复用")
+    issue_types = {str(item) for item in authorization.get("appliedIssueTypes") or []}
+    if not issue_types:
+        raise ApiInputError("修正版授权缺少影响类型，请重新生成修正版")
+
+    store = ArtifactStore(base_dir=str(data_dir / "artifacts"))
+    store.reload()
+    manifest = store.get(source_run_id, "analysis_tools_manifest")
+    if manifest is None or not isinstance(manifest.value, dict):
+        raise ApiInputError("找不到来源运行的可复用分析记录，请执行完整分析")
+    meta = manifest.meta or {}
+    if meta.get("input_fingerprint") != source_fingerprint:
+        raise ApiInputError("来源运行与输入指纹不一致，已拒绝复用")
+    if meta.get("analysis_goal") != analysis_goal:
+        raise ApiInputError("分析目标已改变，不能复用旧结果")
+    expected_config = meta.get("analysis_config") or {
+        field: None for field in ("measureColumn", "groupColumn", "identifierColumn", "timeColumn")
+    }
+    normalized_config = analysis_config or {
+        field: None for field in ("measureColumn", "groupColumn", "identifierColumn", "timeColumn")
+    }
+    if expected_config != normalized_config:
+        raise ApiInputError("字段角色已改变，不能复用旧结果")
+    previous = manifest.value
+    available_keys = [
+        str(item.get("key")) for item in previous.get("executedTools", []) if item.get("key")
+    ]
+    impacted_keys, unknown_issue = impacted_tool_keys_for_issue_types(issue_types, available_keys)
+    return {
+        "sourceRunId": source_run_id,
+        "sourceInputFingerprint": source_fingerprint,
+        "appliedIssueIds": list(dict.fromkeys(applied_issue_ids)),
+        "appliedIssueTypes": sorted(issue_types),
+        "previousTools": previous,
+        "impactedToolKeys": impacted_keys,
+        "reusableToolKeys": [key for key in available_keys if key not in impacted_keys],
+        "unknownIssueFallback": unknown_issue,
+    }
+
+
+def _merge_recovery_tool_results(
+    fresh: dict[str, Any], recovery: dict[str, Any], *, run_id: str,
+) -> dict[str, Any]:
+    """Combine newly executed tools with exact, validated prior artifacts."""
+    previous = recovery["previousTools"]
+    fresh_by_key = {item["key"]: item for item in fresh.get("executedTools", [])}
+    prior_by_key = {item["key"]: item for item in previous.get("executedTools", [])}
+    reusable = set(recovery["reusableToolKeys"])
+    merged_tools: list[dict[str, Any]] = []
+    for key in prior_by_key:
+        if key in fresh_by_key:
+            item = dict(fresh_by_key[key])
+            item["executionStatus"] = "recomputed"
+        elif key in reusable:
+            item = dict(prior_by_key[key])
+            item["executionStatus"] = "reused"
+            item["reusedFromRunId"] = recovery["sourceRunId"]
+        else:
+            continue
+        merged_tools.append(item)
+
+    reusable_refs = {
+        prior_by_key[key].get("evidenceRef") for key in reusable if key in prior_by_key
+    }
+    prior_findings = [
+        item for item in previous.get("findings", [])
+        if set(item.get("evidenceRefs") or []) & reusable_refs
+    ]
+    findings = [*fresh.get("findings", []), *prior_findings]
+    prior_recommendations = [
+        item for item in previous.get("recommendations", [])
+        if not item.get("evidenceRefs") or set(item.get("evidenceRefs") or []) & reusable_refs
+    ]
+    recommendations: list[dict[str, Any]] = []
+    seen_recommendations: set[tuple[str, str]] = set()
+    for item in [*fresh.get("recommendations", []), *prior_recommendations]:
+        key = (str(item.get("action")), str(item.get("rationale")))
+        if key not in seen_recommendations:
+            recommendations.append(item)
+            seen_recommendations.add(key)
+
+    fresh["executedTools"] = merged_tools
+    fresh["findings"] = findings[:30]
+    fresh["recommendations"] = recommendations[:5]
+    fresh["summary"] = {
+        **fresh.get("summary", {}),
+        "executedToolCount": len(merged_tools),
+        "actuallyExecutedToolCount": len(fresh_by_key),
+        "reusedToolCount": len(reusable),
+        "findingCount": len(fresh["findings"]),
+        "recommendationCount": len(fresh["recommendations"]),
+    }
+    fresh["execution"] = {
+        "mode": "selective_recovery",
+        "sourceRunId": recovery["sourceRunId"],
+        "runId": run_id,
+        "executedToolKeys": list(fresh_by_key),
+        "reusedToolKeys": recovery["reusableToolKeys"],
+        "appliedIssueIds": recovery["appliedIssueIds"],
+        "appliedIssueTypes": recovery["appliedIssueTypes"],
+        "unknownIssueFallback": recovery["unknownIssueFallback"],
+        "actualSelectiveExecution": True,
+        "providerAndReportRegenerated": True,
+    }
+    return fresh
+
+
 def _attach_analysis_tools(
     result: dict[str, Any],
     *,
@@ -1209,10 +1578,18 @@ def _attach_analysis_tools(
     repair_plan: dict[str, Any],
     analysis_goal: str,
     analysis_config: dict[str, Any] | None,
+    recovery_context: Any = None,
 ) -> dict[str, Any]:
     """Run local calculations, persist evidence artifacts, and attach UI data."""
     if result.get("analysisTools"):
         return result
+    recovery = _validated_recovery_source(
+        data_dir=data_dir,
+        recovery_context=recovery_context,
+        analysis_goal=analysis_goal,
+        analysis_config=analysis_config,
+        current_input_fingerprint=input_metadata["inputFingerprint"],
+    )
     try:
         tools = run_analysis_tools(
             csv_text,
@@ -1222,11 +1599,18 @@ def _attach_analysis_tools(
             source_row_numbers=input_metadata.get("sourceRowNumbers"),
             repair_plan=repair_plan,
             analysis_config=analysis_config,
+            execute_tool_keys=(recovery["impactedToolKeys"] if recovery else None),
         )
     except ValueError as exc:
         raise ApiInputError(f"当前读取范围无法执行所选分析：{exc}") from exc
+    if recovery:
+        tools = _merge_recovery_tool_results(tools, recovery, run_id=result["runId"])
+        result["recoveryExecution"] = tools["execution"]
+    tools["analysisProcess"] = build_analysis_process(tools, repair_plan)
     store = ArtifactStore(base_dir=str(data_dir / "artifacts"))
     for tool in tools["executedTools"]:
+        if tool.get("executionStatus") == "reused":
+            continue
         store.save(Artifact(
             artifact_id=tool["artifactId"],
             artifact_type=ArtifactType.FIELD,
@@ -1237,8 +1621,26 @@ def _attach_analysis_tools(
                 "task_kind": "tool",
                 "analysis_goal": analysis_goal,
                 "provider_safe_projection_available": True,
+                "recovery_execution": tool.get("executionStatus") or "full",
             },
         ))
+    store.save(Artifact(
+        artifact_id="analysis_tools_manifest",
+        artifact_type=ArtifactType.FIELD,
+        producer_task="analysis_tools_manifest",
+        run_id=result["runId"],
+        value=tools,
+        meta={
+            "task_kind": "tool_manifest",
+            "input_fingerprint": input_metadata["inputFingerprint"],
+            "analysis_goal": analysis_goal,
+            "analysis_config": tools.get("analysisConfig"),
+            "repair_issue_types": {
+                str(issue.get("id")): str(issue.get("type") or "unknown")
+                for issue in repair_plan.get("issues", []) if issue.get("id")
+            },
+        },
+    ))
     tools["executedTools"] = [
         {key: value for key, value in tool.items() if key != "artifactId"}
         for tool in tools["executedTools"]
@@ -1250,6 +1652,7 @@ def _attach_analysis_tools(
         goal=analysis_goal,
         row_count=tools["summary"]["rowCount"],
         analysis_config=tools["analysisConfig"],
+        analysis_tools=tools,
     )
     lines = [
         "",
@@ -1268,6 +1671,10 @@ def _attach_analysis_tools(
     }
     configured = [f"{label}={value}" for label, value in selected_roles.items() if value]
     lines.append(f"- 用户指定字段：{'；'.join(configured) if configured else '未指定，使用保守自动识别'}")
+    lines.extend(["", "### 本次方法选择", ""])
+    for decision in tools["analysisProcess"].get("methodDecisions", []):
+        state = "已执行" if decision["status"] == "executed" else "未执行"
+        lines.append(f"- {decision['method']}：{state}。{decision['result']}")
     for item in tools["findings"][:8]:
         lines.append(f"- {item['title']}：{item['explanation']}（证据：{item['evidenceRefs'][0]}）")
     lines.extend(["", "### 建议处理顺序", ""])
@@ -1553,12 +1960,160 @@ def make_handler(
     data_dir: Path,
     cors_origins: str | None = None,
     provider_runtime: DesktopProviderRuntime | None = None,
+    allow_local_provider_setup: bool = False,
+    key_store: KeyStore | None = None,
 ):
     allowed_origins = _cors_origins(cors_origins)
     runtime = provider_runtime or DesktopProviderRuntime()
+    store = key_store
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "CureFlowLocal/0.1"
+
+        def _local_setup_allowed(self, *, require_origin: bool) -> bool:
+            # Never trust a forwarded client address. The dev proxy also blocks
+            # this route for LAN clients before forwarding to this loopback API.
+            peer = getattr(self, "client_address", (None,))[0]
+            host = self.headers.get("Host", "")
+            hosts = {f"{name}:{port}" for name in ("127.0.0.1", "localhost") for port in (5173, 8766)}
+            origin = self.headers.get("Origin")
+            return bool(
+                allow_local_provider_setup
+                and peer in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+                and host in hosts
+                and (origin == f"http://{host}" or (not require_origin and origin is None))
+            )
+
+        def _key_access_allowed(self, *, require_origin: bool = True) -> bool:
+            peer = getattr(self, "client_address", (None,))[0]
+            token = os.environ.get("CUREFLOW_DESKTOP_KEY_TOKEN", "")
+            supplied = self.headers.get("X-CureFlow-Desktop-Token", "")
+            desktop = bool(token and supplied and hmac.compare_digest(token, supplied))
+            return peer in {"127.0.0.1", "::1", "::ffff:127.0.0.1"} and (
+                desktop or self._local_setup_allowed(require_origin=require_origin)
+            )
+
+        def _key_status(self) -> None:
+            # Same-origin browser GET requests commonly omit Origin. Mutations
+            # below still require Origin (or the private desktop token).
+            if not self._key_access_allowed(require_origin=False):
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "本机密钥管理仅允许运行服务的电脑操作"})
+                return
+            try:
+                active_store = store or KeyStore()
+                providers = active_store.list_providers()
+                opted_in = active_store.is_opted_in()
+                runtime.set_persistence(opted_in, set(providers))
+                self._send_json(HTTPStatus.OK, {
+                    "optedIn": opted_in, "providers": providers,
+                    "lastError": None,
+                })
+            except KeyStoreError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc), "lastError": str(exc)})
+
+        def _key_mutation(self, path: str, method: str) -> None:
+            if not self._key_access_allowed():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "本机密钥管理仅允许运行服务的电脑操作"})
+                return
+            try:
+                body = {}
+                if method == "POST":
+                    if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                        raise KeyStoreError("请求格式不正确")
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 8192 or self.headers.get("Transfer-Encoding"):
+                        raise KeyStoreError("请求大小不正确")
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+                    if not isinstance(body, dict):
+                        raise KeyStoreError("请求格式不正确")
+                active_store = store or KeyStore()
+                if path == "/api/keys/opt-in" and method == "POST":
+                    if body != {"confirm": True}:
+                        raise KeyStoreError("请确认开启本机加密保存")
+                    active_store.opt_in()
+                elif path == "/api/keys/opt-out" and method == "POST":
+                    if body != {"confirm": True}:
+                        raise KeyStoreError("请确认删除本机保存的密钥")
+                    active_store.opt_out()
+                else:
+                    provider = path.removeprefix("/api/keys/")
+                    if provider not in _PROVIDERS:
+                        raise KeyStoreError("不支持的模型服务")
+                    if method == "POST":
+                        expected_fields = {"apiKey", "modelId"} if provider == "doubao" else {"apiKey"}
+                        if set(body) != expected_fields:
+                            raise KeyStoreError("请求格式不正确")
+                        active_store.set(provider, body["apiKey"], body.get("modelId"))
+                    else:
+                        active_store.delete(provider)
+                providers = active_store.list_providers()
+                opted_in = active_store.is_opted_in()
+                runtime.set_persistence(opted_in, set(providers))
+                self._send_json(HTTPStatus.OK, {
+                    "optedIn": opted_in, "providers": providers, "lastError": None,
+                })
+            except KeyStoreError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc), "lastError": str(exc)})
+            except (ValueError, UnicodeError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "本机密钥请求格式不正确", "lastError": "请求格式不正确"})
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "本机密钥操作失败", "lastError": "本机密钥操作失败"})
+
+        def _configure_local_provider(self) -> None:
+            from cureflow_app.local_provider_setup import configure_session
+
+            if not self._key_access_allowed():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "模型配置仅允许本机页面操作"})
+                return
+            try:
+                if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                    raise ValueError()
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 8192 or self.headers.get("Transfer-Encoding"):
+                    raise ValueError()
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    raise ValueError()
+                status = configure_session(runtime, json.loads(raw.decode("utf-8")))
+                self._send_json(HTTPStatus.OK, {**status, "localSetupEnabled": True})
+            except DesktopProviderError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except (ValueError, UnicodeError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "连接配置格式或大小不正确"})
+            except Exception:
+                # This path may contain a secret. Never print payload/traceback.
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "本次连接配置失败，请重试"})
+
+        def _probe_local_provider(self) -> None:
+            if not self._key_access_allowed():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "模型连接验证仅允许本机页面操作"})
+                return
+            try:
+                if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                    raise ValueError()
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 1024 or self.headers.get("Transfer-Encoding"):
+                    raise ValueError()
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    raise ValueError()
+                payload = json.loads(raw.decode("utf-8"))
+                result = probe_provider_connection(runtime, payload)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {**result, "localSetupEnabled": True},
+                )
+            except (DesktopProviderError, ApiInputError) as exc:
+                if isinstance(locals().get("payload"), dict):
+                    runtime.record_connection_error(payload.get("provider"), str(exc))
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except (ValueError, UnicodeError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "连接验证格式不正确"})
+            except Exception:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "连接验证发生异常，请重试"},
+                )
 
         def _send_cors_header(self) -> None:
             request_origin = self.headers.get("Origin")
@@ -1597,18 +2152,31 @@ def make_handler(
             elif path == "/api/recovery-evidence":
                 self._send_json(HTTPStatus.OK, load_recovery_evidence())
             elif path == "/api/provider-status":
-                self._send_json(HTTPStatus.OK, runtime.status())
+                self._send_json(HTTPStatus.OK, {**runtime.status(), "localSetupEnabled": self._local_setup_allowed(require_origin=False)})
+            elif path == "/api/keys/status":
+                self._key_status()
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/keys/opt-in" or path == "/api/keys/opt-out" or path.startswith("/api/keys/"):
+                self._key_mutation(path, "POST")
+                return
+            if path == "/api/provider/configure":
+                self._configure_local_provider()
+                return
+            if path == "/api/provider/probe":
+                self._probe_local_provider()
+                return
             if path == "/api/provider/kill":
                 self._send_json(HTTPStatus.OK, runtime.kill())
                 return
-            if path not in {"/api/analyze", "/api/inspect", "/api/repair/preview", "/api/repair/export"}:
+            if path not in {"/api/analyze", "/api/inspect", "/api/repair/issues", "/api/repair/preview", "/api/repair/export"}:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
+
+            stage = "读取请求"
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > MAX_REQUEST_BYTES:
@@ -1619,19 +2187,30 @@ def make_handler(
                 if path == "/api/inspect":
                     self._send_json(HTTPStatus.OK, inspect_tabular_input(body))
                     return
+                if path == "/api/repair/issues":
+                    self._send_json(HTTPStatus.OK, list_repair_issues(body))
+                    return
                 if path == "/api/repair/preview":
                     self._send_json(HTTPStatus.OK, preview_repaired_copy(body))
                     return
                 if path == "/api/repair/export":
-                    self._send_json(HTTPStatus.OK, export_repaired_copy(body))
+                    repaired = export_repaired_copy(body)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        _authorize_recovery_copy(body, repaired, data_dir),
+                    )
                     return
+                stage = "读取并识别文件"
                 csv_text, workflow_filename, input_metadata, workbook_tables = _analysis_input(body)
+                stage = "生成数据问题清单"
                 repair_plan = build_repair_plan(
                     csv_text,
                     filename=input_metadata["filename"],
                     sheet=input_metadata.get("sheet"),
                     source_row_numbers=input_metadata.get("sourceRowNumbers"),
+                    analysis_config=body.get("analysisConfig"),
                 )
+                stage = "确认分析目标与字段"
                 requested_mode = body.get("providerMode", OFFLINE_MODE)
                 try:
                     analysis_goal = validate_analysis_goal(body.get("analysisGoal", "auto"))
@@ -1651,6 +2230,7 @@ def make_handler(
                         requested_analysis_config, csv_text,
                     )
                     input_metadata["analysisConfig"] = analysis_config
+                    stage = "分析多工作表关系"
                     try:
                         result = analyze_generic_workbook(
                             workbook_tables,
@@ -1666,6 +2246,7 @@ def make_handler(
                         "cloudProviderUsed": requested_mode != OFFLINE_MODE,
                     })
                     result["repairPlan"] = repair_plan
+                    stage = "执行本地分析工具"
                     result = _attach_analysis_tools(
                         result,
                         csv_text=csv_text,
@@ -1674,6 +2255,7 @@ def make_handler(
                         repair_plan=repair_plan,
                         analysis_goal=analysis_goal,
                         analysis_config=analysis_config,
+                        recovery_context=body.get("recoveryContext"),
                     )
                     if requested_mode != OFFLINE_MODE:
                         provider_run = runtime.resolve(
@@ -1681,12 +2263,25 @@ def make_handler(
                             confirm_live=body.get("confirmLive") is True,
                             confirm_max_calls=body.get("confirmMaxCalls"),
                         )
+                        stage = "生成 AI 证据解读"
                         result = _interpret_generic_with_provider(
                             result, provider_run, data_dir
                         )
                 else:
                     try:
-                        csv_text, schema_metadata = prepare_tabular_csv(csv_text)
+                        if analysis_goal == "auto":
+                            csv_text, schema_metadata = prepare_tabular_csv(csv_text)
+                        else:
+                            # An explicit question controls the analysis. Business
+                            # aliases must not route it into the legacy 2024/2025
+                            # six-metric workflow or rename the chosen columns.
+                            schema_metadata = {
+                                "analysisMode": "generic_profile",
+                                "analysisModeLabel": ANALYSIS_GOALS[analysis_goal],
+                                "detectedColumns": next(csv.reader(StringIO(csv_text)), []),
+                                "columnMapping": {},
+                                "derivedColumns": [],
+                            }
                     except ValueError as exc:
                         raise ApiInputError(str(exc)) from exc
                     input_metadata.update(schema_metadata)
@@ -1706,10 +2301,12 @@ def make_handler(
                             csv_text,
                             workflow_filename,
                             data_dir,
+                            repair_plan=repair_plan,
                         )
                         result["repairPlan"] = repair_plan
                         input_metadata["requestedProviderMode"] = requested_mode
                         input_metadata["cloudProviderUsed"] = requested_mode != OFFLINE_MODE
+                        stage = "执行本地分析工具"
                         result = _attach_analysis_tools(
                             result,
                             csv_text=csv_text,
@@ -1718,6 +2315,7 @@ def make_handler(
                             repair_plan=repair_plan,
                             analysis_goal=analysis_goal,
                             analysis_config=analysis_config,
+                            recovery_context=body.get("recoveryContext"),
                         )
                         if requested_mode != OFFLINE_MODE:
                             provider_run = runtime.resolve(
@@ -1725,6 +2323,7 @@ def make_handler(
                                 confirm_live=body.get("confirmLive") is True,
                                 confirm_max_calls=body.get("confirmMaxCalls"),
                             )
+                            stage = "生成 AI 证据解读"
                             result = _interpret_generic_with_provider(
                                 result, provider_run, data_dir
                             )
@@ -1746,6 +2345,7 @@ def make_handler(
                             data_dir,
                             provider_run,
                         )
+                stage = "汇总分析结果"
                 result["repairPlan"] = repair_plan
                 result = _attach_analysis_tools(
                     result,
@@ -1755,13 +2355,26 @@ def make_handler(
                     repair_plan=repair_plan,
                     analysis_goal=analysis_goal,
                     analysis_config=analysis_config,
+                    recovery_context=body.get("recoveryContext"),
                 )
+                stage = "计算修正与重算计划"
                 result["currentRecoveryPlan"] = build_current_recovery_plan(
                     repair_plan,
                     result["analysisTools"],
                     filename=input_metadata["filename"],
                     sheet=input_metadata.get("sheet"),
                     input_fingerprint=input_metadata["inputFingerprint"],
+                )
+                stage = "追踪错误影响范围"
+                result["currentImpactReport"] = build_current_impact_report(
+                    repair_plan=repair_plan,
+                    analysis_tools=result["analysisTools"],
+                    claims=list(result.get("claims") or []),
+                    recovery_plan=result["currentRecoveryPlan"],
+                    filename=input_metadata["filename"],
+                    sheet=input_metadata.get("sheet"),
+                    input_fingerprint=input_metadata["inputFingerprint"],
+                    recovery_execution=result.get("recoveryExecution"),
                 )
                 inventory = input_metadata.get("workbookInventory")
                 if inventory and not inventory.get("relationshipMode"):
@@ -1788,8 +2401,10 @@ def make_handler(
                             f"- 辅助表“{sheet['sheet']}”：{sheet['dataRowCount']:,} 行，{status}；未混入主表统计"
                         )
                     result["report"] = "\n".join(extraction_lines) + "\n\n" + result["report"]
+                stage = "生成易读报告"
                 result["input"] = input_metadata
                 result["report"] = _build_plain_language_report(result)
+                stage = "返回分析结果"
                 self._send_json(HTTPStatus.OK, result)
             except (
                 ApiInputError,
@@ -1800,16 +2415,35 @@ def make_handler(
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             except Exception:
                 diagnostic_id = uuid4().hex[:8]
+                trace_dir = data_dir / "runtime_logs"
+                trace_dir.mkdir(parents=True, exist_ok=True)
+                trace_path = trace_dir / f"analysis_error_{diagnostic_id}.log"
+                trace_path.write_text(
+                    f"stage={stage}\npath={path}\n{traceback.format_exc()}",
+                    encoding="utf-8",
+                )
                 print(
-                    f"[CureFlow] unhandled request error id={diagnostic_id} path={path}",
+                    f"[CureFlow] unhandled request error id={diagnostic_id} path={path} stage={stage}",
                     file=sys.stderr,
                     flush=True,
                 )
                 traceback.print_exc(file=sys.stderr)
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"error": f"本地分析发生异常（诊断编号：{diagnostic_id}），请重试或查看本地日志"},
+                    {
+                        "error": (
+                            f"本地分析在“{stage}”阶段发生异常"
+                            f"（诊断编号：{diagnostic_id}），请重试或查看本地日志"
+                        )
+                    },
                 )
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0]
+            if path.startswith("/api/keys/") and path not in {"/api/keys/opt-in", "/api/keys/opt-out", "/api/keys/status"}:
+                self._key_mutation(path, "DELETE")
+            else:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
 
         def log_message(self, format: str, *args: Any) -> None:
             return
@@ -1817,14 +2451,45 @@ def make_handler(
     return Handler
 
 
+class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Prevent multiple stale desktop backends from sharing one Windows port."""
+
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1,
+            )
+        super().server_bind()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="CureFlow local desktop API")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--data-dir", type=Path, default=ROOT / ".cureflow-desktop-data")
+    parser.add_argument("--allow-local-provider-setup", action="store_true", help="Enable session-only key entry from same-origin loopback pages (never LAN)")
     args = parser.parse_args()
+    if args.allow_local_provider_setup and args.host != "127.0.0.1":
+        parser.error("Local provider setup requires --host 127.0.0.1")
     args.data_dir.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(args.data_dir))
+    runtime = DesktopProviderRuntime()
+    try:
+        persistent_store = KeyStore()
+        restore_persisted_keys(runtime, persistent_store)
+    except KeyStoreError as exc:
+        persistent_store = None
+        runtime.set_persistence_error(str(exc))
+    server = ExclusiveThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(
+            args.data_dir,
+            provider_runtime=runtime,
+            allow_local_provider_setup=args.allow_local_provider_setup,
+            key_store=persistent_store,
+        ),
+    )
     print(f"CureFlow local API: http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()

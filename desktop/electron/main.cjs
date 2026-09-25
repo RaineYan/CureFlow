@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { randomBytes } = require("node:crypto");
 
 let backend = null;
 let mainWindow = null;
@@ -11,6 +12,11 @@ let stderrRemainder = "";
 let stderrDialogShown = false;
 let backendRestarting = false;
 const sessionProviderEnv = Object.create(null);
+const desktopKeyToken = randomBytes(32).toString("hex");
+const DOUBAO_MODEL = "doubao-seed-2-0-pro-260215";
+const backendPort = Number(process.env.CUREFLOW_BACKEND_PORT || 8766);
+if (!Number.isInteger(backendPort) || backendPort < 1024 || backendPort > 65535) throw new Error("本地服务端口无效");
+const backendUrl = `http://127.0.0.1:${backendPort}`;
 const STDERR_DIALOG_THRESHOLD = 20;
 const PROVIDER_SESSION_CONFIG = Object.freeze({
   openai: {
@@ -24,6 +30,11 @@ const PROVIDER_SESSION_CONFIG = Object.freeze({
   deepseek: {
     keyEnv: "DEEPSEEK_API_KEY",
     confirmEnv: "CUREFLOW_ENABLE_DEEPSEEK_LIVE",
+  },
+  doubao: {
+    keyEnv: "DOUBAO_API_KEY",
+    confirmEnv: "CUREFLOW_ENABLE_DOUBAO_LIVE",
+    modelEnv: "DOUBAO_MODEL",
   },
 });
 
@@ -95,13 +106,13 @@ function backendCommand(dataDir) {
   if (app.isPackaged) {
     return {
       command: path.join(process.resourcesPath, "backend", "cureflow-backend.exe"),
-      args: ["--port", "8766", "--data-dir", dataDir],
+      args: ["--port", String(backendPort), "--data-dir", dataDir],
       cwd: path.join(process.resourcesPath, "backend"),
     };
   }
   return {
     command: process.env.CUREFLOW_PYTHON || "python",
-    args: [path.join(projectRoot(), "cureflow_app", "server.py"), "--port", "8766", "--data-dir", dataDir],
+    args: [path.join(projectRoot(), "cureflow_app", "server.py"), "--port", String(backendPort), "--data-dir", dataDir],
     cwd: projectRoot(),
   };
 }
@@ -115,6 +126,7 @@ function startBackend() {
     env: {
       ...process.env,
       ...sessionProviderEnv,
+      CUREFLOW_DESKTOP_KEY_TOKEN: desktopKeyToken,
       PYTHONUTF8: "1",
       CORS_ORIGINS: process.env.CUREFLOW_DEV_URL ? "http://127.0.0.1:5173" : "null",
     },
@@ -190,38 +202,113 @@ ipcMain.handle("cureflow:configure-provider", async (event, payload) => {
   const spec = PROVIDER_SESSION_CONFIG[provider];
   if (!spec) throw new Error("不支持的模型服务");
   const useExistingEnvironmentKey = payload?.useExistingEnvironmentKey === true;
-  let apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
-  if (useExistingEnvironmentKey) {
-    const existingKey = String(process.env[spec.keyEnv] || "");
-    if (existingKey.length < 8 || existingKey.length > 4096 || /[\r\n\0]/.test(existingKey)) {
-      throw new Error("系统环境中没有可用的 API key");
+  let modelId = typeof payload?.modelId === "string" ? payload.modelId.trim() : "";
+  if (provider === "doubao") {
+    modelId = modelId || String(sessionProviderEnv.DOUBAO_MODEL || process.env.DOUBAO_MODEL || "").trim();
+    if (!modelId && useExistingEnvironmentKey) {
+      const current = await fetch(`${backendUrl}/api/provider-status`).then(response => response.json());
+      modelId = String(current.doubao?.model || "").trim();
     }
-  } else {
+    modelId = modelId || DOUBAO_MODEL;
+    if (!modelId || modelId.length > 128 || /\s/.test(modelId)) throw new Error("请填写已开通的火山方舟模型或接入点 ID");
+  }
+  if (useExistingEnvironmentKey) {
+    const response = await fetch(`${backendUrl}/api/provider/configure`, {
+      method: "POST",
+      headers: { "X-CureFlow-Desktop-Token": desktopKeyToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, useExistingEnvironmentKey: true, confirmSession: true, ...(provider === "doubao" ? { modelId } : {}) }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "已有密钥无法启用");
+    return result;
+  }
+  let apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
+  {
     if (apiKey.length < 8 || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey)) {
       throw new Error("API key 格式无效");
     }
     sessionProviderEnv[spec.keyEnv] = apiKey;
   }
+  if (provider === "doubao") sessionProviderEnv.DOUBAO_MODEL = modelId;
   sessionProviderEnv[spec.confirmEnv] = "1";
   apiKey = "";
   try {
     await restartBackend();
-    const response = await fetch("http://127.0.0.1:8766/api/provider-status");
+    const response = await fetch(`${backendUrl}/api/provider-status`);
     if (!response.ok) throw new Error("连接状态检查失败");
     return await response.json();
   } catch (error) {
     if (!useExistingEnvironmentKey) delete sessionProviderEnv[spec.keyEnv];
     delete sessionProviderEnv[spec.confirmEnv];
+    if (spec.modelEnv) delete sessionProviderEnv[spec.modelEnv];
     await restartBackend().catch(() => {});
     throw error;
   }
 });
 
+ipcMain.handle("cureflow:keys", async (event, payload) => {
+  assertTrustedRenderer(event);
+  const operation = payload?.operation;
+  const provider = payload?.provider;
+  const routes = {
+    status: ["GET", "/api/keys/status"],
+    optIn: ["POST", "/api/keys/opt-in"],
+    optOut: ["POST", "/api/keys/opt-out"],
+    set: ["POST", `/api/keys/${provider}`],
+    delete: ["DELETE", `/api/keys/${provider}`],
+  };
+  if (!Object.hasOwn(routes, operation)) throw new Error("不支持的密钥管理操作");
+  if (["set", "delete"].includes(operation) && !Object.hasOwn(PROVIDER_SESSION_CONFIG, provider)) {
+    throw new Error("不支持的模型服务");
+  }
+  const [method, route] = routes[operation];
+  let body;
+  if (operation === "optIn" || operation === "optOut") body = { confirm: true };
+  if (operation === "set") {
+    const key = payload?.apiKey;
+    if (typeof key !== "string" || key.length < 8 || key.length > 4096 || /\s/.test(key)) throw new Error("密钥格式无效");
+    body = { apiKey: key };
+    if (provider === "doubao") {
+      const modelId = payload?.modelId || DOUBAO_MODEL;
+      if (typeof modelId !== "string" || !modelId || modelId.length > 128 || /\s/.test(modelId)) throw new Error("请填写已开通的火山方舟模型或接入点 ID");
+      body.modelId = modelId;
+    }
+  }
+  const response = await fetch(`${backendUrl}${route}`, {
+    method,
+    headers: { "X-CureFlow-Desktop-Token": desktopKeyToken, ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "本机密钥操作失败");
+  return result;
+});
+
+ipcMain.handle("cureflow:probe-provider", async (event, provider) => {
+  assertTrustedRenderer(event);
+  if (!Object.hasOwn(PROVIDER_SESSION_CONFIG, provider)) throw new Error("不支持的模型服务");
+  const response = await fetch(`${backendUrl}/api/provider/probe`, {
+    method: "POST",
+    headers: { "X-CureFlow-Desktop-Token": desktopKeyToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, confirmProbe: true }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "模型连接验证失败");
+  return result;
+});
+
+ipcMain.handle("cureflow:restart-backend", async (event) => {
+  assertTrustedRenderer(event);
+  await restartBackend();
+  return { healthy: true };
+});
+
 async function waitForBackend() {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
-      const response = await fetch("http://127.0.0.1:8766/api/health");
-      if (response.ok) return;
+      if (backend?.exitCode !== null) throw new Error("本地服务提前退出");
+      const response = await fetch(`${backendUrl}/api/keys/status`, { headers: { "X-CureFlow-Desktop-Token": desktopKeyToken } });
+      if (response.ok || (response.status === 400 && (await response.json()).lastError)) return;
     } catch (_) {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -231,8 +318,8 @@ async function waitForBackend() {
 async function publishBackendHealth() {
   let healthy = false;
   try {
-    const response = await fetch("http://127.0.0.1:8766/api/health");
-    healthy = response.ok && (await response.json()).ok === true;
+    const response = await fetch(`${backendUrl}/api/keys/status`, { headers: { "X-CureFlow-Desktop-Token": desktopKeyToken } });
+    healthy = response.ok || (response.status === 400 && Boolean((await response.json()).lastError));
   } catch (_) {}
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("cureflow:backend-health", healthy);
@@ -241,12 +328,11 @@ async function publishBackendHealth() {
 
 function startHealthMonitor() {
   publishBackendHealth();
-  healthTimer = setInterval(publishBackendHealth, 30_000);
+  healthTimer = setInterval(publishBackendHealth, 3_000);
 }
 
 async function createWindow() {
   startBackend();
-  await waitForBackend();
   const win = new BrowserWindow({
     width: 1440, height: 920, minWidth: 1100, minHeight: 720,
     backgroundColor: "#050b1a", title: "CureFlow",
@@ -263,9 +349,18 @@ async function createWindow() {
   startHealthMonitor();
 }
 
-app.whenReady().then(createWindow).catch((error) => {
-  dialog.showErrorBox("CureFlow 启动失败", error.message); app.quit();
-});
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+  app.whenReady().then(createWindow).catch((error) => {
+    dialog.showErrorBox("CureFlow 启动失败", error.message); app.quit();
+  });
+}
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", () => {
   if (healthTimer) clearInterval(healthTimer);

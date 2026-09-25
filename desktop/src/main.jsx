@@ -5,6 +5,7 @@ import "./styles.css";
 import "./native.css";
 import "./trace.css";
 import "./brand-theme.css";
+import "./workspace-refresh.css";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode><App /></React.StrictMode>,

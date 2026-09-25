@@ -191,7 +191,21 @@ def test_each_cloud_provider_requires_its_own_local_authorization(
             confirm_max_calls=MAX_DESKTOP_LIVE_CALLS,
         )
     monkeypatch.setenv(confirm_env, "1")
-    assert DesktopProviderRuntime().status()[provider]["ready"] is True
+    status = DesktopProviderRuntime().status()[provider]
+    assert status["ready"] is False
+    assert status["connectionVerified"] is False
+    assert "PROVIDER_CONNECTION_UNVERIFIED" in status["blockers"]
+
+
+def test_runtime_marks_only_the_tested_provider_verified(monkeypatch) -> None:
+    monkeypatch.setenv(OPENAI_KEY_ENV, "local-test-secret")
+    monkeypatch.setenv(LIVE_CONFIRM_ENV, "1")
+    runtime = DesktopProviderRuntime()
+    runtime.mark_verified("openai")
+    assert runtime.status()["openai"]["ready"] is True
+    assert runtime.status()["deepseek"]["connectionVerified"] is False
+    runtime.clear_verification("openai")
+    assert runtime.status()["openai"]["ready"] is False
 
 
 def test_desktop_budget_is_full_workflow_not_three_scenario_pilot() -> None:

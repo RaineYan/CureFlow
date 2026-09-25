@@ -8,9 +8,11 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CUREFLOW_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "dev:web": "vite --host 127.0.0.1",
-    "dev:web:backend": "python ../cureflow_app/server.py --port 8766 --data-dir ../.cureflow-desktop-data",
+    "dev:web:backend": "python ../cureflow_app/server.py --port 8766 --data-dir ../.cureflow-desktop-data --allow-local-provider-setup",
     "dev:web:full": "concurrently -k -s first \"npm:dev:web\" \"npm:dev:web:backend\"",
+    "dev:web:lan:full": "node scripts/start-lan.cjs",
     "build": "vite build",
+    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs",
     "start": "npm run build && electron .",
     "smoke-test": "node scripts/smoke-test.cjs",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
