@@ -3,6 +3,12 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
+const { readNativeDataFile } = require("./data-file.cjs");
+
+// Isolate automated startup checks from the user's running window and history.
+if (!app.isPackaged && process.env.CUREFLOW_SMOKE_USER_DATA) {
+  app.setPath("userData", process.env.CUREFLOW_SMOKE_USER_DATA);
+}
 
 let backend = null;
 let mainWindow = null;
@@ -40,24 +46,12 @@ const PROVIDER_SESSION_CONFIG = Object.freeze({
 
 async function selectDataFile() {
   const result = await dialog.showOpenDialog({
-    title: "选择经营数据",
+    title: "选择表格数据",
     properties: ["openFile"],
-    filters: [{ name: "经营数据", extensions: ["csv", "xlsx"] }],
+    filters: [{ name: "表格数据", extensions: ["csv", "xlsx"] }],
   });
   if (result.canceled || result.filePaths.length !== 1) return null;
-  const filePath = result.filePaths[0];
-  const stat = await fs.stat(filePath);
-  if (stat.size > 5 * 1024 * 1024) throw new Error("数据文件不能超过 5 MB");
-  const filename = path.basename(filePath);
-  const extension = path.extname(filename).toLowerCase();
-  if (extension === ".csv") {
-    return { filename, csvText: await fs.readFile(filePath, "utf8") };
-  }
-  if (extension === ".xlsx") {
-    const workbook = await fs.readFile(filePath);
-    return { filename, xlsxBase64: workbook.toString("base64") };
-  }
-  throw new Error("仅支持 CSV 或 XLSX 文件");
+  return readNativeDataFile(result.filePaths[0]);
 }
 
 ipcMain.handle("cureflow:select-data-file", selectDataFile);

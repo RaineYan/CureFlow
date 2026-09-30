@@ -4,7 +4,7 @@
 >
 > **Windows 桌面应用** · **本地优先** · **按需连接真实 AI 模型**
 
-CureFlow 的目标是：当数据分析工作流中的数据、AI 结论或证据引用出错时，找出错误来源和受影响的后续结果，只重做受影响的步骤，并验证修正后的结果。当前产品同时提供文件导入、本地数据检查、人工复核、按需 AI 解读和修正版复测；研究性工作流与冻结实验仍保留在同一仓库。
+CureFlow 的目标是：当数据分析工作流中的数据、AI 结论或证据引用出错时，找出错误来源和受影响的后续结果，只重做受影响的步骤，并验证修正后的结果。当前产品同时提供文件导入、本地数据检查、人工复核、按需 AI 解读和修正版复测。源码包含研究工作流；历史冻结实验原始证据保留在本机，不随 Git 源码上传。
 
 使用者先导入自己的 CSV/XLSX，确认读取范围，再查看本地检查结果；本地检查不需要 API Key。需要 AI 解读时，再选择并验证自己有权使用的模型。统计极端值只是复核线索，不等于数据错误；系统不会凭猜测填补缺失值，也不会覆盖原文件。完整操作、安装包验证状态和隐私边界见 [桌面版使用说明](desktop/README.md)。
 
@@ -102,7 +102,7 @@ class MyStrategy:
 
 ### 5.3 当前验证方式
 - 在当前源码和环境中运行 `python -m pytest tests/ -q`；不要把旧交接文档中的 609、731 或 960 项通过数当作当前验收结果。
-- 运行 `python scripts/verify_evidence_sha.py` 检查历史冻结证据；本次核查输出为 `Verified 284 files, 0 mismatch`，后续改动仍须重新核验。
+- 历史冻结证据保留在原实验机器，不随源码上传。持有完整证据时运行 `python scripts/verify_evidence_sha.py`；没有证据不能声称已完成历史实验核验。后续改动仍须重新核验。
 - 发布桌面版前还须运行 `cd desktop` 后的 `npm run smoke-test`，并在干净 Windows 机器上验安装、启动、文件导入和卸载。
 
 ---
@@ -110,6 +110,8 @@ class MyStrategy:
 ## 6. 怎么跑
 
 ### 6.1 开发者安装依赖
+
+需要 Python 3.10+，以及 Node.js 20.19+ 或 22.12+。使用仓库的 `package-lock.json` 安装桌面依赖，避免每台机器自行选取不同依赖版本。
 ```powershell
 # 在源码根目录执行
 pip install -r requirements.txt
@@ -118,13 +120,14 @@ pip install -r requirements.txt
 ### 6.2 跑测试
 ```powershell
 python -m pytest tests/ -q
+# 以下核验需要原实验机器上的冻结证据，公开源码不包含这些文件
 python scripts/verify_evidence_sha.py
 ```
 
 ### 6.3 从源码启动桌面版
 ```powershell
 cd desktop
-npm install
+npm ci
 npm start
 # 构建界面、启动 Electron，并自动启动本地服务
 ```
@@ -159,7 +162,7 @@ poc/
 ├── cureflow_app/      # Desktop backend (HTTP API)
 ├── desktop/           # Electron + Vite + React 前端
 ├── tests/             # 自动化测试；数量以本次 pytest 结果为准
-└── experiments/       # M1 / M3 60 trial evidence（frozen）
+└── experiments/       # 实验代码；results/ 中冻结证据仅保留在本机
 ```
 
 ---

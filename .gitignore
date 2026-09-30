@@ -19,6 +19,7 @@ desktop/dist/
 desktop/build/
 desktop/release/
 desktop/release-validation*/
+desktop/release-20[0-9][0-9]*/
 desktop/.vite/
 npm-debug.log*
 yarn-debug.log*
@@ -87,3 +88,8 @@ config.local.*
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 个人申报材料与本机界面核对产物不随产品源码发布
+/软著申请资料/
+/_submission_qa/
+/desktop_qa/

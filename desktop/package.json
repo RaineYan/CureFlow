@@ -5,6 +5,7 @@
   "author": "CureFlow Team",
   "description": "CureFlow trusted AI workflow desktop POC",
   "main": "electron/main.cjs",
+  "engines": { "node": "^20.19.0 || >=22.12.0" },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CUREFLOW_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "dev:web": "vite --host 127.0.0.1",
@@ -12,7 +13,7 @@
     "dev:web:full": "concurrently -k -s first \"npm:dev:web\" \"npm:dev:web:backend\"",
     "dev:web:lan:full": "node scripts/start-lan.cjs",
     "build": "vite build",
-    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs",
+    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs scripts/native-data-file.test.cjs scripts/smoke-health.test.cjs",
     "start": "npm run build && electron .",
     "smoke-test": "node scripts/smoke-test.cjs",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",

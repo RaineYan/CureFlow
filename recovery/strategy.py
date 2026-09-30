@@ -334,6 +334,11 @@ class _BaseStrategyMixin:
         if a.artifact_type == ArtifactType.FIELD:
             raw = store.get(ctx.run_id, "raw_data")
             assert raw is not None
+            from artifacts import ArtifactStatus
+            if ctx.plan.strategy_name.upper() not in {"FULL_RERUN", "COARSE_CHECKPOINT"} and raw.validation_status not in {
+                ArtifactStatus.VALID.value, ArtifactStatus.RECOVERED.value,
+            }:
+                raise ValueError(f"strategy: raw_data is {raw.validation_status}")
             new_art = recompute_field_artifact_from_raw(
                 bad_field=a, raw_artifact=raw, ctx=ctx.run_ctx,
             )
@@ -463,6 +468,13 @@ class _BaseStrategyMixin:
             if a is None:
                 raise KeyError(
                     f"strategy: cannot fetch {target_ref.to_ref_string()}"
+                )
+            from artifacts import ArtifactStatus
+            if ctx.plan.strategy_name.upper() not in {"FULL_RERUN", "COARSE_CHECKPOINT"} and a.validation_status not in {
+                ArtifactStatus.VALID.value, ArtifactStatus.RECOVERED.value,
+            }:
+                raise ValueError(
+                    f"strategy: input {target_ref.to_ref_string()} is {a.validation_status}"
                 )
             out.append(a)
         return out

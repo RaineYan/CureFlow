@@ -1,8 +1,7 @@
-"""Offline characterization of the current H5 false positive; not a product test.
+"""Offline regression check for the corrected H5 recommendation boundary.
 
 Run from the repository root: python -m docs.h5_false_positive_repro
-This asserts the *observed* bug so a future fix should replace this script with
-a desired-behavior regression test in tests/test_claim_grounding.py.
+The product regression tests live in tests/test_claim_grounding.py.
 """
 
 import os
@@ -50,9 +49,8 @@ def main() -> None:
             print(label, audit.verdict.value, [code.value for code in audit.risk_codes], audit.issues)
 
         assert RiskCode.H5_SCOPE_EXPANSION not in findings["baseline"].risk_codes
-        assert RiskCode.H5_SCOPE_EXPANSION in findings["neutral"].risk_codes
-        assert findings["neutral"].issues == ["recommendation token found: 'recommend'"]
-        print("REPRODUCED: neutral mention of recommendation system is marked H5")
+        assert RiskCode.H5_SCOPE_EXPANSION not in findings["neutral"].risk_codes
+        print("PASS: neutral mention of recommendation system is not marked H5")
 
 
 if __name__ == "__main__":

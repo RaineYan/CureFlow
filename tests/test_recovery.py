@@ -266,6 +266,53 @@ def test_unaffected_artifact_listed_as_reuse(store: ArtifactStore) -> None:
     assert "claim_report_operation_section" in reused_aids
 
 
+@pytest.mark.parametrize("status", [ArtifactStatus.INVALIDATED, ArtifactStatus.SUSPECT])
+def test_executor_rejects_unverified_planned_reuse_before_execution(
+    store: ArtifactStore, status: ArtifactStatus,
+) -> None:
+    source = store.save(Artifact(
+        artifact_id="source", artifact_type=ArtifactType.FIELD,
+        producer_task="source", run_id="reuse_guard", value=1,
+    ))
+    target = store.save(Artifact(
+        artifact_id="target", artifact_type=ArtifactType.FIELD,
+        producer_task="target", run_id="reuse_guard", value=2,
+    ))
+    source_ref = ArtifactRef(run_id="reuse_guard", artifact_id="source", version=source.version)
+    target_ref = ArtifactRef(run_id="reuse_guard", artifact_id="target", version=target.version)
+    store.update_status("reuse_guard", "source", status)
+    plan = RecoveryPlan(run_id="reuse_guard", target_ref=target_ref, reused_refs=[source_ref])
+    out = RecoveryExecutor(
+        store, ArtifactGraph.from_store(store, "reuse_guard"), default_workflow_llm(),
+    ).execute(plan)
+    assert out.success is False
+    assert out.executed_steps == []
+    assert out.reused_refs == []
+    assert source_ref.to_ref_string() in out.failure_reason
+
+
+def test_executor_rejects_bad_explicit_reuse_target_before_execution(store: ArtifactStore) -> None:
+    target = store.save(Artifact(
+        artifact_id="target", artifact_type=ArtifactType.FIELD,
+        producer_task="target", run_id="reuse_step_guard", value=2,
+    ))
+    target_ref = ArtifactRef(run_id="reuse_step_guard", artifact_id="target", version=target.version)
+    store.update_status("reuse_step_guard", "target", ArtifactStatus.INVALIDATED)
+    plan = RecoveryPlan(
+        run_id="reuse_step_guard", target_ref=target_ref,
+        steps=[RecoveryStep(
+            order=1, action=RecoveryAction.REUSE, target_ref=target_ref,
+            execution_unit="reuse", reason="test",
+        )],
+    )
+    out = RecoveryExecutor(
+        store, ArtifactGraph.from_store(store, "reuse_step_guard"), default_workflow_llm(),
+    ).execute(plan)
+    assert out.success is False
+    assert out.executed_steps == []
+    assert "INVALIDATED" in out.failure_reason
+
+
 # =====================================================================
 # 7-13: executor + version remapping
 # =====================================================================

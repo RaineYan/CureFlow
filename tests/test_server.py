@@ -330,6 +330,56 @@ def test_corrected_copy_recomputes_only_impacted_tools_and_reuses_the_rest(handl
     }
 
 
+def test_corrected_rank_value_invalidates_rank_tool_even_for_generic_missing_issue(handler_request) -> None:
+    source = "编号,排名,总人数,数值\n" + "\n".join(
+        f"R{index},{'' if index == 3 else index},10,{index * 2}"
+        for index in range(1, 9)
+    ) + "\n"
+    first = _post_json(handler_request, {
+        "filename": "source.csv", "csvText": source, "analysisGoal": "auto",
+    })
+    assert first["status"] == 200
+    original = first["json"]
+    issue = next(
+        item for item in original["repairPlan"]["issues"]
+        if item["type"] == "missing_value" and item["location"]["column"] == "排名"
+    )
+    exported = _repair_export_json(handler_request, {
+        "filename": "source.csv",
+        "csvText": source,
+        "sourceRunId": original["runId"],
+        "inputFingerprint": original["input"]["inputFingerprint"],
+        "approvedFixIds": [],
+        "manualCorrections": [{"issueId": issue["id"], "newValue": "3"}],
+        "confirmManualCorrections": True,
+    })
+    assert exported["status"] == 200
+    recovered = _post_json(handler_request, {
+        "filename": exported["json"]["filename"],
+        "csvText": exported["json"]["csvText"],
+        "analysisGoal": "auto",
+        "recoveryContext": {
+            "sourceRunId": original["runId"],
+            "sourceInputFingerprint": original["input"]["inputFingerprint"],
+            "appliedIssueIds": [issue["id"]],
+        },
+    })
+    assert recovered["status"] == 200
+    execution = recovered["json"]["recoveryExecution"]
+    assert "rank_consistency" in execution["inputChangedToolKeys"]
+    assert "rank_consistency" in execution["executedToolKeys"]
+    assert "rank_consistency" not in execution["reusedToolKeys"]
+    full = _post_json(handler_request, {
+        "filename": exported["json"]["filename"],
+        "csvText": exported["json"]["csvText"],
+        "analysisGoal": "auto",
+    })
+    assert full["status"] == 200
+    recovered_rank = next(tool for tool in recovered["json"]["analysisTools"]["executedTools"] if tool["key"] == "rank_consistency")
+    full_rank = next(tool for tool in full["json"]["analysisTools"]["executedTools"] if tool["key"] == "rank_consistency")
+    assert recovered_rank["payload"] == full_rank["payload"]
+
+
 def test_selective_recovery_rejects_fix_not_bound_to_exported_copy(handler_request) -> None:
     source = "编号,备注\nA, ok \nB,clean\n"
     first = _post_json(handler_request, {"filename": "source.csv", "csvText": source})["json"]

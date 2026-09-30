@@ -92,6 +92,21 @@ def _fetch_exact(store: ArtifactStore, ref: ArtifactRef) -> Optional[Artifact]:
     return store.get_version(ref.run_id, ref.artifact_id, ref.version)
 
 
+def _validate_clean_ref(store: ArtifactStore, ref: ArtifactRef) -> str:
+    """Return an actionable reason when an exact input cannot be reused."""
+    artifact = _fetch_exact(store, ref)
+    if artifact is None:
+        return f"reuse input {ref.to_ref_string()} is missing"
+    if artifact.validation_status not in {
+        ArtifactStatus.VALID.value, ArtifactStatus.RECOVERED.value,
+    }:
+        return (
+            f"reuse input {ref.to_ref_string()} is "
+            f"{artifact.validation_status}, not VALID/RECOVERED"
+        )
+    return ""
+
+
 # =====================================================================
 # Executor
 # =====================================================================
@@ -110,12 +125,46 @@ class RecoveryExecutor:
     def execute(self, plan: RecoveryPlan) -> RecoveryExecutionResult:
         replacement: RefMap = {}
         executed: List[ExecutedRecoveryStep] = []
+        strategy_name = getattr(plan, "strategy_name", "SELECTIVE_RECOVERY")
+        # These two frozen experimental baselines intentionally replay their
+        # original field-as-source policy. Strict guards apply to selective
+        # (and future) strategies; changing baseline behavior here would make
+        # historical cost comparisons non-comparable.
+        strict_reuse = strategy_name.upper() not in {"FULL_RERUN", "COARSE_CHECKPOINT"}
+
+        def failed(reason: str) -> RecoveryExecutionResult:
+            return RecoveryExecutionResult(
+                run_id=plan.run_id, plan=plan, replacement_map=replacement,
+                executed_steps=executed, reused_refs=[], success=False,
+                failure_reason=reason,
+            )
+
+        # Preflight every exact ref that the plan intends to reuse. A bad
+        # source must fail before the first tool/model call, not only in the
+        # clean-path audit after execution.
+        if strict_reuse:
+            already_replaced: Set[str] = set()
+            for ref in plan.reused_refs:
+                reason = _validate_clean_ref(self.store, ref)
+                if reason:
+                    return failed(reason)
+            for step in plan.steps:
+                if step.action == RecoveryAction.REUSE:
+                    reason = _validate_clean_ref(self.store, step.target_ref)
+                    if reason:
+                        return failed(reason)
+                for ref in step.required_input_refs:
+                    if _ref_key(ref) not in already_replaced:
+                        reason = _validate_clean_ref(self.store, ref)
+                        if reason:
+                            return failed(reason)
+                if step.action != RecoveryAction.REUSE:
+                    already_replaced.add(_ref_key(step.target_ref))
 
         # Day 14 v2: resolve the strategy for this plan.  The
         # legacy v1 plans did not stamp a strategy_name, so the
         # RecoveryPlan default of "SELECTIVE_RECOVERY" kicks in
         # and we end up with the v1 behaviour byte-for-byte.
-        strategy_name = getattr(plan, "strategy_name", "SELECTIVE_RECOVERY")
         strategy = REGISTRY.get(strategy_name)
 
         ctx = RecoveryContext(
@@ -131,6 +180,18 @@ class RecoveryExecutor:
         )
 
         for step in plan.steps:
+            # Recheck at actual consumption; planning and execution may be
+            # separated by a status update in the store.
+            if strict_reuse:
+                refs = [step.target_ref] if step.action == RecoveryAction.REUSE else []
+                refs.extend(
+                    ArtifactRef.from_ref_string(replacement.get(_ref_key(ref), _ref_key(ref)))
+                    for ref in step.required_input_refs
+                )
+                for ref in refs:
+                    reason = _validate_clean_ref(self.store, ref)
+                    if reason:
+                        return failed(reason)
             # The strategy decides how to run a step.  For the
             # three built-in actions the BaseStrategy mixin
             # returns an ExecutedRecoveryStep; for new actions

@@ -145,9 +145,15 @@ def recommendation_boundary_check(text: str) -> Tuple[bool, List[str]]:
     """True iff `text` contains no recommendation / decision language.
     Both Chinese and English tokens are checked (case-insensitive)."""
     issues: List[str] = []
-    lowered = text.lower()
     for tok in _RECOMMENDATION_TOKENS:
-        if tok in text or tok.lower() in lowered:
+        # English directives must be complete words/phrases. A substring
+        # match marks neutral nouns such as "recommendation system" and
+        # "consideration" as prescriptive advice.
+        matched = (
+            re.search(r"(?<![A-Za-z])" + re.escape(tok) + r"(?![A-Za-z])", text, re.IGNORECASE)
+            if tok.isascii() else tok in text
+        )
+        if matched:
             issues.append(f"recommendation token found: {tok!r}")
     return (len(issues) == 0), issues
 

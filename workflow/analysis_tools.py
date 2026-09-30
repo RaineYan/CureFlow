@@ -8,6 +8,8 @@ the underlying calculation.
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 import re
 from io import StringIO
 from typing import Any, Iterable
@@ -477,6 +479,99 @@ def _rank_total_pairs(columns: Iterable[Any]) -> list[tuple[str, str]]:
             if common > 0 or len(totals) == 1:
                 pairs.append((rank, total))
     return pairs
+
+
+def _input_signatures(
+    frame: pd.DataFrame,
+    *,
+    config: dict[str, str | None],
+    row_numbers: list[int],
+    sheet: str | None,
+    repair_plan: dict[str, Any] | None,
+    tool_keys: set[str] | None = None,
+) -> dict[str, str]:
+    """Hash each tool's actual input domain, without persisting row values.
+
+    A signature is a reuse guard, not an identity or security credential. The
+    projections deliberately include extra columns where eligibility depends
+    on their contents; under-invalidation would reuse a stale calculation.
+    """
+    names = [str(column) for column in frame.columns]
+    selected = tool_keys if tool_keys is not None else set(GOAL_TOOLS["auto"])
+    numeric_names = (
+        set(_numeric_columns(frame, [config["identifierColumn"]] if config["identifierColumn"] else []))
+        if "distribution_profile" in selected else set()
+    )
+    relationship_names = (
+        set(_relationship_numeric_columns(frame, [config["identifierColumn"]] if config["identifierColumn"] else []))
+        if "relationship_screen" in selected else set()
+    )
+    projections = {
+        "quality_audit": names,
+        "distribution_profile": [
+            name for name in names
+            if name in numeric_names and (not config["measureColumn"] or name == config["measureColumn"])
+        ],
+        "rank_consistency": [name for name in names if _is_rank(name) or _is_count(name)],
+        "relationship_screen": [
+            name for name in names
+            if name in relationship_names or name in {config["measureColumn"], config["timeColumn"]}
+        ],
+        "group_comparison": [
+            name for name in names
+            if not _is_identifier(name) and name != config["identifierColumn"]
+        ],
+    }
+    summary = (repair_plan or {}).get("summary") or {}
+    records = list(frame.itertuples(index=False, name=None))
+    signatures: dict[str, str] = {}
+    for key, selected_names in projections.items():
+        if key not in selected:
+            continue
+        indexes = [index for index, name in enumerate(names) if name in selected_names]
+        values = [
+            [None if pd.isna(row[index]) else str(row[index]) for index in indexes]
+            for row in records
+        ]
+        context: dict[str, Any] = {
+            "schema": names,
+            "selectedColumns": [names[index] for index in indexes],
+            "values": values,
+            "rowNumbers": row_numbers,
+            "sheet": sheet,
+            "config": config,
+        }
+        if key == "quality_audit":
+            context["repairSummary"] = {
+                "safeFixCount": summary.get("safeFixCount", 0),
+                "reviewCount": summary.get("reviewCount", 0),
+            }
+        if key == "distribution_profile":
+            context["iqrScreening"] = summary.get("iqrScreening") or []
+        encoded = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        signatures[key] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return signatures
+
+
+def analysis_tool_input_signatures(
+    csv_text: str,
+    *,
+    sheet: str | None = None,
+    source_row_numbers: Iterable[int] | None = None,
+    repair_plan: dict[str, Any] | None = None,
+    analysis_config: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Calculate the same per-tool reuse guards for a corrected upload."""
+    frame = pd.read_csv(StringIO(csv_text), dtype=object)
+    if frame.empty:
+        raise ValueError("分析工具至少需要一行数据")
+    frame.columns = [str(column).strip() or f"column_{index + 1}" for index, column in enumerate(frame.columns)]
+    config = validate_analysis_config(analysis_config, frame.columns)
+    supplied_rows = list(source_row_numbers or [])
+    row_numbers = supplied_rows if len(supplied_rows) == len(frame) else list(range(2, len(frame) + 2))
+    return _input_signatures(
+        frame, config=config, row_numbers=row_numbers, sheet=sheet, repair_plan=repair_plan,
+    )
 
 
 def run_analysis_tools(
@@ -1016,6 +1111,10 @@ def run_analysis_tools(
         "goal": selected_goal,
         "goalLabel": ANALYSIS_GOALS[selected_goal],
         "analysisConfig": config,
+        "inputSignatures": _input_signatures(
+            frame, config=config, row_numbers=row_numbers, sheet=sheet,
+            repair_plan=repair_plan, tool_keys=active_tools,
+        ),
         "summary": {
             "executedToolCount": len(tools),
             "actuallyExecutedToolCount": len(tools),

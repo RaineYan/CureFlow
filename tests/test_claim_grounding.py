@@ -152,6 +152,28 @@ def test_absolute_scope_requires_review(tmp_path) -> None:
     assert RiskCode.H5_SCOPE_EXPANSION in audit.risk_codes
 
 
+def test_neutral_recommendation_system_is_not_prescriptive_scope_expansion(tmp_path) -> None:
+    store, revenue, margin = _financial_store(tmp_path)
+    claim = _claim(
+        store,
+        "本分析记录了 recommendation system 的使用情况；营收同比增长60.78%，利润率达到47.56%。",
+        [_ref(revenue), _ref(margin)],
+    )
+    audit = audit_claim_grounding(claim=claim, domain="financial", store=store)
+    assert RiskCode.H5_SCOPE_EXPANSION not in audit.risk_codes
+
+
+def test_explicit_recommendation_still_requires_review(tmp_path) -> None:
+    store, revenue, margin = _financial_store(tmp_path)
+    claim = _claim(
+        store,
+        "We recommend expanding the plan; 营收同比增长60.78%，利润率达到47.56%。",
+        [_ref(revenue), _ref(margin)],
+    )
+    audit = audit_claim_grounding(claim=claim, domain="financial", store=store)
+    assert RiskCode.H5_SCOPE_EXPANSION in audit.risk_codes
+
+
 def test_suspect_source_blocks_grounded_label(tmp_path) -> None:
     store, revenue, margin = _financial_store(tmp_path)
     store.update_status(RUN_ID, revenue.artifact_id, ArtifactStatus.SUSPECT)
@@ -232,4 +254,3 @@ def test_method_identifier_is_stable(tmp_path) -> None:
     )
     audit = audit_claim_grounding(claim=claim, domain="financial", store=store)
     assert audit.method == METHOD
-

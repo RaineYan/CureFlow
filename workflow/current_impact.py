@@ -158,7 +158,8 @@ def build_current_impact_report(
     else:
         headline = "当前规则未发现数据、AI 断言或证据引用问题；这不代表结果绝对正确。"
 
-    actual_selective = bool((recovery_execution or {}).get("actualSelectiveExecution"))
+    recovery_executed = recovery_execution is not None
+    actual_reuse = bool((recovery_execution or {}).get("reusedToolKeys"))
     return {
         "version": "current_unified_impact_v1",
         "source": {
@@ -188,12 +189,13 @@ def build_current_impact_report(
             for key in reusable_keys
         ],
         "recoveryPlanStatus": recovery_plan.get("status"),
-        "recoveryExecution": recovery_execution if actual_selective else None,
+        "recoveryExecution": recovery_execution,
         "executionBoundary": {
             "dataCluesConfirmedAsErrors": False,
             "impactIsPlan": True,
-            "selectiveRecoveryExecuted": actual_selective,
-            "actualToolReuseRecorded": actual_selective,
+            "recoveryExecuted": recovery_executed,
+            "selectiveRecoveryExecuted": actual_reuse,
+            "actualToolReuseRecorded": actual_reuse,
             "actualSavingsClaimed": False,
         },
     }

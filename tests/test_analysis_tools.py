@@ -4,6 +4,7 @@ import pytest
 
 from workflow.analysis_tools import (
     GOAL_TOOLS,
+    analysis_tool_input_signatures,
     provider_safe_tool_results,
     run_analysis_tools,
     validate_analysis_config,
@@ -287,6 +288,21 @@ def test_selective_execution_physically_skips_unselected_numeric_tools(monkeypat
         "executedToolKeys": ["quality_audit"],
         "reusedToolKeys": [],
     }
+
+
+def test_distribution_reuse_guard_tracks_selected_measure_not_unselected_numeric_column() -> None:
+    source = "编号,数值,辅助值\n" + "\n".join(
+        f"R{index},{index},{index * 2}" for index in range(1, 9)
+    ) + "\n"
+    other_changed = source.replace("R3,3,6", "R3,3,60")
+    measure_changed = source.replace("R3,3,6", "R3,30,6")
+    config = {"measureColumn": "数值"}
+    before = analysis_tool_input_signatures(source, analysis_config=config)
+    after_other = analysis_tool_input_signatures(other_changed, analysis_config=config)
+    after_measure = analysis_tool_input_signatures(measure_changed, analysis_config=config)
+    assert before["distribution_profile"] == after_other["distribution_profile"]
+    assert before["distribution_profile"] != after_measure["distribution_profile"]
+    assert before["relationship_screen"] != after_other["relationship_screen"]
 
 
 def test_selective_execution_rejects_tool_outside_goal() -> None:

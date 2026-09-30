@@ -12,7 +12,7 @@ $sample = Join-Path $projectRoot "data\sample_company.csv"
 $exp02 = Join-Path $projectRoot "experiments\results\exp02\exp02_summary.json"
 $v2 = Join-Path $projectRoot "experiments\results\v2_execution_benchmark\benchmark_data.json"
 
-foreach ($required in @($entryPoint, $sample, $exp02)) {
+foreach ($required in @($entryPoint, $sample)) {
     if (-not (Test-Path -LiteralPath $required)) {
         throw "Missing backend build resource: $required"
     }
@@ -29,9 +29,11 @@ $arguments = @(
     "--specpath", $specRoot,
     "--paths", $projectRoot,
     "--additional-hooks-dir", $hookRoot,
-    "--add-data", "$sample;data",
-    "--add-data", "$exp02;experiments\results\exp02"
+    "--add-data", "$sample;data"
 )
+if (Test-Path -LiteralPath $exp02) {
+    $arguments += @("--add-data", "$exp02;experiments\results\exp02")
+}
 if (Test-Path -LiteralPath $v2) {
     $arguments += @("--add-data", "$v2;experiments\results\v2_execution_benchmark")
 }
@@ -39,7 +41,8 @@ $arguments += $entryPoint
 
 Push-Location $projectRoot
 try {
-    & python @arguments
+    $pythonCommand = if ($env:CUREFLOW_PYTHON) { $env:CUREFLOW_PYTHON } else { "python" }
+    & $pythonCommand @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code: $LASTEXITCODE"
     }

@@ -95,6 +95,7 @@ def test_execution_boundary_does_not_overclaim_selective_recovery() -> None:
     assert boundary == {
         "dataCluesConfirmedAsErrors": False,
         "impactIsPlan": True,
+        "recoveryExecuted": False,
         "selectiveRecoveryExecuted": False,
         "actualToolReuseRecorded": False,
         "actualSavingsClaimed": False,
@@ -117,6 +118,25 @@ def test_actual_selective_execution_is_recorded_without_cost_claim() -> None:
         },
     )
     assert report["executionBoundary"]["selectiveRecoveryExecuted"] is True
+    assert report["executionBoundary"]["recoveryExecuted"] is True
     assert report["executionBoundary"]["actualToolReuseRecorded"] is True
     assert report["executionBoundary"]["actualSavingsClaimed"] is False
     assert report["recoveryExecution"]["reusedToolKeys"] == ["rank_consistency"]
+
+
+def test_full_fallback_recovery_is_recorded_without_claiming_reuse() -> None:
+    report = build_current_impact_report(
+        repair_plan={"issues": [], "summary": {"issueCount": 0}},
+        analysis_tools=_tools(), claims=[],
+        recovery_plan={"status": "no_recovery_needed"},
+        filename="fixed.csv", sheet=None, input_fingerprint="fixed123",
+        recovery_execution={
+            "actualSelectiveExecution": False,
+            "executedToolKeys": ["quality_audit", "rank_consistency"],
+            "reusedToolKeys": [],
+        },
+    )
+    assert report["executionBoundary"]["recoveryExecuted"] is True
+    assert report["executionBoundary"]["selectiveRecoveryExecuted"] is False
+    assert report["executionBoundary"]["actualToolReuseRecorded"] is False
+    assert report["recoveryExecution"]["executedToolKeys"] == ["quality_audit", "rank_consistency"]

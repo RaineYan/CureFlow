@@ -47,7 +47,9 @@ def test_smoke_script_launches_electron_and_checks_health() -> None:
     source = _read("desktop/scripts/smoke-test.cjs")
     assert '"smoke-test": "node scripts/smoke-test.cjs"' in package
     assert 'require("electron")' in source
-    assert "await wait(5_000)" in source
+    assert "await waitForHealth(" in source
+    assert "CUREFLOW_SMOKE_USER_DATA" in source
+    assert "CUREFLOW_SMOKE_USER_DATA" in _read("desktop/electron/main.cjs")
     assert "reserveFreePort()" in source
     assert "CUREFLOW_BACKEND_PORT: String(backendPort)" in source
     assert "http://127.0.0.1:${backendPort}/api/health" in source
@@ -177,7 +179,12 @@ def test_desktop_picker_supports_csv_and_xlsx_without_exposing_paths() -> None:
     main = _read("desktop/electron/main.cjs")
     preload = _read("desktop/electron/preload.cjs")
     assert 'extensions: ["csv", "xlsx"]' in main
-    assert 'workbook.toString("base64")' in main
+    assert 'return readNativeDataFile(result.filePaths[0])' in main
+    native = _read("desktop/electron/data-file.cjs")
+    shared = _read("desktop/electron/data-format.mjs")
+    assert 'name: path.basename(filePath)' in native
+    assert 'import("./data-format.mjs")' in native
+    assert 'xlsxBase64: btoa(binary)' in shared
     assert 'ipcMain.handle("cureflow:select-data-file"' in main
     assert "selectDataFile" in preload
     assert 'ipcRenderer.invoke("cureflow:select-data-file")' in preload

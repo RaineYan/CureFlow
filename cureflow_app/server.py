@@ -37,7 +37,7 @@ ROOT = (
 )
 sys.path.insert(0, str(ROOT))
 
-from artifacts import Artifact, ArtifactStore, ArtifactType  # noqa: E402
+from artifacts import Artifact, ArtifactRef, ArtifactStatus, ArtifactStore, ArtifactType  # noqa: E402
 from llm import default_workflow_llm  # noqa: E402
 from llm.task_router import TaskAwareLLMClient  # noqa: E402
 from cureflow_app.provider_runtime import (  # noqa: E402
@@ -71,6 +71,7 @@ from workflow.repair_analysis import (  # noqa: E402
 )
 from workflow.analysis_tools import (  # noqa: E402
     ANALYSIS_GOALS,
+    analysis_tool_input_signatures,
     build_analysis_process,
     provider_safe_tool_results,
     run_analysis_tools,
@@ -1421,6 +1422,10 @@ def _validated_recovery_source(
     analysis_goal: str,
     analysis_config: dict[str, Any] | None,
     current_input_fingerprint: str,
+    corrected_csv_text: str,
+    corrected_sheet: str | None,
+    corrected_row_numbers: Any,
+    corrected_repair_plan: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Load and validate the exact prior local-tool run selected for reuse."""
     if recovery_context in (None, {}):
@@ -1470,7 +1475,10 @@ def _validated_recovery_source(
     store = ArtifactStore(base_dir=str(data_dir / "artifacts"))
     store.reload()
     manifest = store.get(source_run_id, "analysis_tools_manifest")
-    if manifest is None or not isinstance(manifest.value, dict):
+    if (
+        manifest is None or not isinstance(manifest.value, dict)
+        or manifest.validation_status not in {ArtifactStatus.VALID.value, ArtifactStatus.RECOVERED.value}
+    ):
         raise ApiInputError("找不到来源运行的可复用分析记录，请执行完整分析")
     meta = manifest.meta or {}
     if meta.get("input_fingerprint") != source_fingerprint:
@@ -1490,6 +1498,40 @@ def _validated_recovery_source(
         str(item.get("key")) for item in previous.get("executedTools", []) if item.get("key")
     ]
     impacted_keys, unknown_issue = impacted_tool_keys_for_issue_types(issue_types, available_keys)
+    try:
+        current_signatures = analysis_tool_input_signatures(
+            corrected_csv_text,
+            sheet=corrected_sheet,
+            source_row_numbers=corrected_row_numbers,
+            repair_plan=corrected_repair_plan,
+            analysis_config=analysis_config,
+        )
+    except ValueError as exc:
+        raise ApiInputError(f"修正版无法验证分析输入：{exc}") from exc
+    previous_signatures = previous.get("inputSignatures") or {}
+    prior_by_key = {item.get("key"): item for item in previous.get("executedTools", [])}
+    input_changed: list[str] = []
+    evidence_invalid: list[str] = []
+    for key in available_keys:
+        if previous_signatures.get(key) != current_signatures.get(key):
+            input_changed.append(key)
+            continue
+        tool = prior_by_key[key]
+        try:
+            ref = ArtifactRef.from_ref_string(str(tool.get("evidenceRef") or ""))
+            artifact = store.get_version(ref.run_id, ref.artifact_id, ref.version)
+        except (TypeError, ValueError):
+            artifact = None
+        if (
+            artifact is None
+            or artifact.validation_status not in {ArtifactStatus.VALID.value, ArtifactStatus.RECOVERED.value}
+            or artifact.value != tool.get("payload")
+        ):
+            evidence_invalid.append(key)
+    impacted_keys = [
+        key for key in available_keys
+        if key in impacted_keys or key in input_changed or key in evidence_invalid
+    ]
     return {
         "sourceRunId": source_run_id,
         "sourceInputFingerprint": source_fingerprint,
@@ -1499,6 +1541,9 @@ def _validated_recovery_source(
         "impactedToolKeys": impacted_keys,
         "reusableToolKeys": [key for key in available_keys if key not in impacted_keys],
         "unknownIssueFallback": unknown_issue,
+        "inputChangedToolKeys": input_changed,
+        "invalidEvidenceToolKeys": evidence_invalid,
+        "currentSignatures": current_signatures,
     }
 
 
@@ -1544,6 +1589,9 @@ def _merge_recovery_tool_results(
             seen_recommendations.add(key)
 
     fresh["executedTools"] = merged_tools
+    fresh["inputSignatures"] = {
+        key: recovery["currentSignatures"][key] for key in prior_by_key
+    }
     fresh["findings"] = findings[:30]
     fresh["recommendations"] = recommendations[:5]
     fresh["summary"] = {
@@ -1563,8 +1611,11 @@ def _merge_recovery_tool_results(
         "appliedIssueIds": recovery["appliedIssueIds"],
         "appliedIssueTypes": recovery["appliedIssueTypes"],
         "unknownIssueFallback": recovery["unknownIssueFallback"],
-        "actualSelectiveExecution": True,
-        "providerAndReportRegenerated": True,
+        "inputChangedToolKeys": recovery["inputChangedToolKeys"],
+        "invalidEvidenceToolKeys": recovery["invalidEvidenceToolKeys"],
+        "actualSelectiveExecution": bool(reusable),
+        "reportRegenerated": True,
+        "providerRegenerated": False,
     }
     return fresh
 
@@ -1589,6 +1640,10 @@ def _attach_analysis_tools(
         analysis_goal=analysis_goal,
         analysis_config=analysis_config,
         current_input_fingerprint=input_metadata["inputFingerprint"],
+        corrected_csv_text=csv_text,
+        corrected_sheet=input_metadata.get("sheet"),
+        corrected_row_numbers=input_metadata.get("sourceRowNumbers"),
+        corrected_repair_plan=repair_plan,
     )
     try:
         tools = run_analysis_tools(
@@ -2357,6 +2412,10 @@ def make_handler(
                     analysis_config=analysis_config,
                     recovery_context=body.get("recoveryContext"),
                 )
+                if result.get("recoveryExecution"):
+                    result["recoveryExecution"]["providerRegenerated"] = bool(
+                        (result.get("provider") or {}).get("live")
+                    )
                 stage = "计算修正与重算计划"
                 result["currentRecoveryPlan"] = build_current_recovery_plan(
                     repair_plan,
