@@ -97,7 +97,6 @@ MAX_XLSX_ROWS = 10_001  # one header row plus at most 10,000 data rows
 MAX_XLSX_COLUMNS = 100
 MAX_XLSX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 MAX_XLSX_ARCHIVE_MEMBERS = 2_000
-SAMPLE_CSV = ROOT / "data" / "sample_company.csv"
 EXP02_SUMMARY = ROOT / "experiments" / "results" / "exp02" / "exp02_summary.json"
 
 METRIC_LABELS = {
@@ -2199,13 +2198,6 @@ def make_handler(
             path = self.path.split("?", 1)[0]
             if path == "/api/health":
                 self._send_json(HTTPStatus.OK, {"ok": True, "service": "cureflow-local"})
-            elif path == "/api/sample":
-                self._send_json(
-                    HTTPStatus.OK,
-                    {"filename": SAMPLE_CSV.name, "csvText": SAMPLE_CSV.read_text(encoding="utf-8")},
-                )
-            elif path == "/api/recovery-evidence":
-                self._send_json(HTTPStatus.OK, load_recovery_evidence())
             elif path == "/api/provider-status":
                 self._send_json(HTTPStatus.OK, {**runtime.status(), "localSetupEnabled": self._local_setup_allowed(require_origin=False)})
             elif path == "/api/keys/status":

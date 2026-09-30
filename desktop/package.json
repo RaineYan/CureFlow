@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "author": "CureFlow Team",
-  "description": "CureFlow trusted AI workflow desktop POC",
+  "description": "CureFlow 本地数据核对、证据追溯与修正复测桌面版",
   "main": "electron/main.cjs",
   "engines": { "node": "^20.19.0 || >=22.12.0" },
   "scripts": {
@@ -13,9 +13,10 @@
     "dev:web:full": "concurrently -k -s first \"npm:dev:web\" \"npm:dev:web:backend\"",
     "dev:web:lan:full": "node scripts/start-lan.cjs",
     "build": "vite build",
-    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs scripts/native-data-file.test.cjs scripts/smoke-health.test.cjs",
+    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs scripts/native-data-file.test.cjs scripts/smoke-health.test.cjs scripts/analysis-history.test.cjs",
     "start": "npm run build && electron .",
     "smoke-test": "node scripts/smoke-test.cjs",
+    "smoke:packaged": "node scripts/packaged-smoke.cjs",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
     "dist:win": "npm run build && npm run build:backend && electron-builder --win nsis --x64"
   },

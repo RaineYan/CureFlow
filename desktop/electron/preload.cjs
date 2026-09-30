@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("cureflow", {
   saveDataFile: (payload) => ipcRenderer.invoke("cureflow:save-data-file", payload),
   configureProvider: (payload) => ipcRenderer.invoke("cureflow:configure-provider", payload),
   manageKeys: (payload) => ipcRenderer.invoke("cureflow:keys", payload),
+  analysisHistory: (payload) => ipcRenderer.invoke("cureflow:analysis-history", payload),
   probeProvider: (provider) => ipcRenderer.invoke("cureflow:probe-provider", provider),
   restartBackend: () => ipcRenderer.invoke("cureflow:restart-backend"),
   setUiScale: (value) => {

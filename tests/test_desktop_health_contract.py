@@ -112,7 +112,7 @@ def test_first_run_allows_provider_free_file_check_without_cloud_model() -> None
     assert 'providerMode:runMode,confirmLive:useAi' in source
     assert 'onClick={()=>runAnalysis(false)}' in source
     assert 'onClick={selectedProviderReady?()=>runAnalysis(true):()=>setShowLauncher(true)}' in source
-    assert "开始本地分析（不调用 AI）" in source
+    assert "检查文件并定位问题 →" in source
     assert "使用 AI 解读（最多 6 次调用）" in source
     assert "局域网访问者不能使用此配置入口" in source
     assert 'model:"doubao-seed-2-0-pro-260215"' in source
@@ -301,7 +301,7 @@ def test_ui_requires_provider_free_input_inspection_before_analysis() -> None:
     assert "系统实际读取" in source
     assert "未调用 AI" in source
     assert "切换主数据表" in source
-    assert "开始本地分析（不调用 AI）" in source
+    assert "检查文件并定位问题 →" in source
     assert 'if(!inspection){setError("请先完成数据读取检查")' in source
     assert "读取错误时先切换工作表，不要直接生成报告" in source
     assert ".inspection-panel" in styles

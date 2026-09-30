@@ -35,7 +35,17 @@
 .sidebar-history > p,
 .local-badge small { font-size: 12px; line-height: 1.45; }
 
+.analysis-history-control { margin: 0 0 18px; padding: 12px 16px; border: 1px solid var(--workspace-line); border-radius: 10px; color: #b9cfdf; background: rgba(23, 49, 70, .28); }
+.analysis-history-control summary { color: #e3f3ff; font-size: 14px; font-weight: 650; cursor: pointer; }
+.analysis-history-control p { max-width: 76ch; margin: 10px 0; font-size: 13px; line-height: 1.6; }
+.analysis-history-control button { margin: 3px 0; padding: 8px 12px; }
+.analysis-history-control .error { color: #ff9c9c; }
+
 .incident-flow-panel { margin: 0 0 24px; padding: 0 0 16px; border-bottom: 1px solid var(--workspace-line); }
+.incident-flow-panel[hidden], .provider-inline[hidden] { display: none !important; }
+.analysis-goal-options { margin: 12px 0; border-top: 1px solid var(--workspace-line); padding-top: 10px; }
+.analysis-goal-options > summary { color: #b9d9eb; font-size: 14px; font-weight: 650; cursor: pointer; }
+.analysis-goal-options[open] .analysis-goal-picker { margin-top: 12px; }
 .view-workspace .incident-flow-heading { display: flex; }
 .incident-flow-heading h2 { font-size: 15px; }
 .incident-flow-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }

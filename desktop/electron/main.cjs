@@ -1,12 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
 const { readNativeDataFile } = require("./data-file.cjs");
+const { createAnalysisHistoryStore } = require("./analysis-history.cjs");
 
-// Isolate automated startup checks from the user's running window and history.
-if (!app.isPackaged && process.env.CUREFLOW_SMOKE_USER_DATA) {
+// Isolate both source and packaged startup checks from the user's real data.
+if (process.env.CUREFLOW_SMOKE_USER_DATA) {
   app.setPath("userData", process.env.CUREFLOW_SMOKE_USER_DATA);
 }
 
@@ -276,6 +277,18 @@ ipcMain.handle("cureflow:keys", async (event, payload) => {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "本机密钥操作失败");
   return result;
+});
+
+ipcMain.handle("cureflow:analysis-history", async (event, payload) => {
+  assertTrustedRenderer(event);
+  const history = createAnalysisHistoryStore({ userData: app.getPath("userData"), encryption: safeStorage });
+  switch (payload?.action) {
+    case "status": return history.status();
+    case "enable": return history.enable(payload.entries);
+    case "save": return history.save(payload.entries);
+    case "disable": return history.disable();
+    default: throw new Error("不支持的分析记录操作");
+  }
 });
 
 ipcMain.handle("cureflow:probe-provider", async (event, provider) => {

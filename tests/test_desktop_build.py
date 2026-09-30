@@ -45,7 +45,7 @@ exit 0
     args = json.loads((project / "invocation.json").read_text(encoding="utf-8-sig"))
     assert args[:2] == ["-m", "PyInstaller"]
     assert args[-1] == str(project / "cureflow_app/server.py")
-    assert any("sample_company.csv" in x for x in args)
-    assert any("exp02_summary.json" in x for x in args) == with_research_files
-    assert any("benchmark_data.json" in x for x in args) == with_research_files
+    assert not any("sample_company.csv" in x for x in args)
+    assert not any("exp02_summary.json" in x for x in args)
+    assert not any("benchmark_data.json" in x for x in args)
     assert "BACKEND_EXE=" in result.stdout.decode(errors="replace")

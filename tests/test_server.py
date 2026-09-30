@@ -40,6 +40,11 @@ def _post_json(handler_request, payload: object):
     return handler_request("POST", "/api/analyze", json.dumps(payload).encode("utf-8"))
 
 
+def _sample_payload() -> dict[str, str]:
+    sample_path = Path(__file__).resolve().parents[1] / "data" / "sample_company.csv"
+    return {"filename": sample_path.name, "csvText": sample_path.read_text(encoding="utf-8")}
+
+
 def _inspect_json(handler_request, payload: object):
     return handler_request("POST", "/api/inspect", json.dumps(payload).encode("utf-8"))
 
@@ -110,11 +115,10 @@ def test_health(handler_request) -> None:
     assert response["json"] == {"ok": True, "service": "cureflow-local"}
 
 
-def test_sample(handler_request) -> None:
+def test_internal_samples_are_not_exposed_by_the_product_api(handler_request) -> None:
     response = handler_request("GET", "/api/sample")
-    assert response["status"] == 200
-    assert response["json"]["filename"] == "sample_company.csv"
-    assert "year,month,revenue,cost,users,orders,visits" in response["json"]["csvText"]
+    assert response["status"] == 404
+    assert handler_request("GET", "/api/recovery-evidence")["status"] == 404
 
 
 def test_inspect_returns_file_structure_without_provider_or_claims(handler_request) -> None:
@@ -143,11 +147,9 @@ def test_inspect_separates_header_semantics_from_analysis_eligibility(handler_re
     assert columns["专业年级总人数"]["analysisEligible"] is False
 
 
-def test_recovery_evidence(handler_request) -> None:
+def test_historical_recovery_evidence_is_not_a_product_route(handler_request) -> None:
     response = handler_request("GET", "/api/recovery-evidence")
-    assert response["status"] == 200
-    expected = {"experimentId", "mode", "stage", "trialCount", "strategies", "reductionsVsFull"}
-    assert expected <= response["json"].keys()
+    assert response["status"] == 404
 
 
 def test_provider_status_defaults_offline_and_exposes_no_key(handler_request) -> None:
@@ -189,7 +191,7 @@ def test_openai_analyze_without_confirmation_never_reaches_network(
 
 
 def test_analyze_success_shape(handler_request) -> None:
-    sample = handler_request("GET", "/api/sample")["json"]
+    sample = _sample_payload()
     response = _post_json(handler_request, sample)
     assert response["status"] == 200
     assert response["json"]["mode"] == "OFFLINE_DETERMINISTIC_FIXTURE"
@@ -496,7 +498,7 @@ def test_repair_preview_endpoint_returns_before_after_delta(handler_request) -> 
 def test_analyze_exposes_claim_grounding_without_calling_a_judge_model(
     handler_request,
 ) -> None:
-    sample = handler_request("GET", "/api/sample")["json"]
+    sample = _sample_payload()
     payload = _post_json(handler_request, sample)["json"]
     assert len(payload["claims"]) == 3
     assert {claim["grounding"]["verdict"] for claim in payload["claims"]} == {
@@ -557,7 +559,7 @@ def test_unknown_post(handler_request) -> None:
 
 
 def test_analyze_has_six_named_metrics(handler_request) -> None:
-    sample = handler_request("GET", "/api/sample")["json"]
+    sample = _sample_payload()
     metrics = _post_json(handler_request, sample)["json"]["metrics"]
     assert [item["key"] for item in metrics] == [
         "revenue_growth", "profit_margin", "cost_ratio", "user_growth",
@@ -566,7 +568,7 @@ def test_analyze_has_six_named_metrics(handler_request) -> None:
 
 
 def test_analyze_has_five_successful_stages(handler_request) -> None:
-    sample = handler_request("GET", "/api/sample")["json"]
+    sample = _sample_payload()
     stages = _post_json(handler_request, sample)["json"]["stages"]
     assert [item["key"] for item in stages] == [
         "extract", "metrics", "claims", "sections", "merge",
