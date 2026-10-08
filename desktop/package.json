@@ -13,12 +13,13 @@
     "dev:web:full": "concurrently -k -s first \"npm:dev:web\" \"npm:dev:web:backend\"",
     "dev:web:lan:full": "node scripts/start-lan.cjs",
     "build": "vite build",
-    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs scripts/native-data-file.test.cjs scripts/smoke-health.test.cjs scripts/analysis-history.test.cjs",
+    "test:ui-logic": "node --test scripts/ui-logic.test.mjs scripts/review-explanation.test.mjs scripts/review-progress.test.mjs scripts/native-data-file.test.cjs scripts/smoke-health.test.cjs scripts/analysis-history.test.cjs",
     "start": "npm run build && electron .",
     "smoke-test": "node scripts/smoke-test.cjs",
     "smoke:packaged": "node scripts/packaged-smoke.cjs",
     "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
-    "dist:win": "npm run build && npm run build:backend && electron-builder --win nsis --x64"
+    "dist:win": "npm run build && npm run build:backend && electron-builder --win nsis --x64 && npm run release:verify",
+    "release:verify": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release.ps1"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.1.1",
@@ -57,7 +58,8 @@
     "win": {
       "target": ["nsis"],
       "icon": "public/cureflow-logo.png",
-      "signAndEditExecutable": false
+      "forceCodeSigning": true,
+      "signExts": ["cureflow-backend.exe"]
     },
     "nsis": {
       "oneClick": false,

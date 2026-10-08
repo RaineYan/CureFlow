@@ -20,6 +20,7 @@ desktop/build/
 desktop/release/
 desktop/release-validation*/
 desktop/release-20[0-9][0-9]*/
+desktop/release-*/
 desktop/.vite/
 npm-debug.log*
 yarn-debug.log*
@@ -50,11 +51,6 @@ artifacts/openai*
 artifacts/collaboration/
 **/openai_live_audit/
 experiments/results/
-!experiments/results/
-experiments/results/**
-!experiments/results/exp02/
-!experiments/results/exp02/m4_doubao/
-!experiments/results/exp02/m4_doubao/trial_manifest.json
 
 # AI 协作交接材料保留在本机，不作为产品源码发布
 /HANDOFF_TO_CODEX.md

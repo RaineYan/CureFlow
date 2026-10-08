@@ -48,7 +48,7 @@ GOAL_TOOLS = {
         "quality_audit", "distribution_profile", "rank_consistency",
         "relationship_screen", "group_comparison",
     },
-    "data_quality": {"quality_audit", "rank_consistency"},
+    "data_quality": {"quality_audit", "distribution_profile", "rank_consistency"},
     "score_audit": {"distribution_profile", "rank_consistency", "group_comparison"},
     "business_review": {"distribution_profile", "relationship_screen", "group_comparison"},
     "industrial_review": {"quality_audit", "distribution_profile", "relationship_screen"},
@@ -241,13 +241,15 @@ def build_analysis_process(
     comparisons = groups.get("comparisons") or []
     if comparisons:
         visuals.append({
-            "key": "groups", "type": "comparison", "title": "分组均值差异",
-            "subtitle": "仅为描述性比较，尚未控制混杂因素或完成显著性检验。",
+            "key": "groups", "type": "comparison", "title": "各组均值",
+            "subtitle": "展示每个至少有 2 条有效数值的分组；仅为描述性比较，尚未完成显著性检验。",
             "unit": "均值", "series": [
                 {
                     "label": f"{item.get('categoryColumn')} · {item.get('measureColumn')}",
                     "highLabel": item.get("highestGroup"), "high": item.get("highestMean"),
                     "lowLabel": item.get("lowestGroup"), "low": item.get("lowestMean"),
+                    "groups": item.get("groupStats") or [],
+                    "excludedGroupCount": item.get("excludedGroupCount", 0),
                 }
                 for item in comparisons[:6]
             ],
@@ -372,7 +374,7 @@ def build_analysis_process(
             "evidenceRef": stage_refs.get("distribution_profile") if any(item.get("status") == "applied" for item in iqr_screens) else None,
         },
         {
-            "method": "时间顺序与采样间隔", "status": "executed" if trend else "skipped",
+            "method": "时间顺序与采样间隔", "status": "executed" if trend else ("skipped" if stage_refs.get("relationship_screen") else "not_selected"),
             "result": (f"按 {trend['timeColumn']} 分析 {trend['comparableRows']} 个可比时间点；不据此预测。"
                        if trend else "需要明确时间字段和数值主指标，且至少有 4 个可比点。"),
             "sourceUrl": METHOD_SOURCES["time_sequence"],
@@ -380,21 +382,21 @@ def build_analysis_process(
         },
         {
             "method": "分组位置与离散度", "methodCardIds": ["effect_size"],
-            "status": "executed" if comparisons else "skipped",
+            "status": "executed" if comparisons else ("skipped" if stage_refs.get("group_comparison") else "not_selected"),
             "result": (f"完成 {len(comparisons)} 项描述性比较；不推断因果。" if comparisons
                        else "需要可用分组字段、数值主指标及每组足够记录。"),
             "sourceUrl": METHOD_SOURCES["group_location_scale"],
             "evidenceRef": stage_refs.get("group_comparison") if comparisons else None,
         },
         {
-            "method": "分类交叉计数", "status": "executed" if groups.get("categoryCrossTabs") else "skipped",
+            "method": "分类交叉计数", "status": "executed" if groups.get("categoryCrossTabs") else ("skipped" if stage_refs.get("group_comparison") else "not_selected"),
             "result": (f"完成 {len(groups['categoryCrossTabs'])} 对分类字段交叉计数；组内比例以该组有效记录为分母。"
                        if groups.get("categoryCrossTabs") else "需要两个低基数分类字段和足够的共同有效记录。"),
             "sourceUrl": METHOD_SOURCES["categorical_cross_tab"],
             "evidenceRef": stage_refs.get("group_comparison") if groups.get("categoryCrossTabs") else None,
         },
         {
-            "method": "连续字段线性相关", "status": "executed" if relationships.get("screenedPairCount", 0) else "skipped",
+            "method": "连续字段线性相关", "status": "executed" if relationships.get("screenedPairCount", 0) else ("skipped" if stage_refs.get("relationship_screen") else "not_selected"),
             "result": (f"成对筛查后达到展示阈值的关系 {relationships.get('candidateCount', 0)} 对；相关不等于因果。"
                        if relationships.get("screenedPairCount", 0)
                        else "需要至少两个可比较数值字段和足够的成对有效记录。"),
@@ -402,7 +404,7 @@ def build_analysis_process(
             "evidenceRef": stage_refs.get("relationship_screen") if relationships.get("screenedPairCount", 0) else None,
         },
         {
-            "method": "排名范围约束", "status": "executed" if ranks.get("pairCount") else "skipped",
+            "method": "排名范围约束", "status": "executed" if ranks.get("pairCount") else ("skipped" if stage_refs.get("rank_consistency") else "not_selected"),
             "result": (f"核对 {ranks['pairCount']} 对排名与总人数列。" if ranks.get("pairCount")
                        else "未找到可核对的排名与总人数列对。"),
             "sourceUrl": None,
@@ -973,6 +975,14 @@ def run_analysis_tools(
                 groups = groups[groups["count"] >= 2].sort_values("mean", ascending=False)
                 if len(groups) < 2:
                     continue
+                all_categories = frame[category].dropna().astype(str).str.strip()
+                all_categories = set(all_categories[all_categories != ""])
+                group_stats = [
+                    {"label": str(label), "count": int(row["count"]),
+                     "mean": _finite(row["mean"]), "median": _finite(row["median"]),
+                     "std": _finite(row["std"])}
+                    for label, row in groups.iterrows()
+                ]
                 high = groups.iloc[0]
                 low = groups.iloc[-1]
                 group_comparisons.append({
@@ -990,6 +1000,8 @@ def run_analysis_tools(
                     "lowestCount": int(low["count"]),
                     "meanGap": _finite(float(high["mean"] - low["mean"])),
                     "groupCount": int(len(groups)),
+                    "groupStats": group_stats,
+                    "excludedGroupCount": len(all_categories - set(groups.index)),
                 })
     if "group_comparison" in active_tools and len(frame) >= 8:
         category_columns: list[str] = []
@@ -1032,7 +1044,14 @@ def run_analysis_tools(
                 f"当前样本中“{item['highestGroup']}”均值 {item['highestMean']:.2f}，"
                 f"“{item['lowestGroup']}”均值 {item['lowestMean']:.2f}；"
                 f"两组中位数分别为 {item['highestMedian']:.2f}、{item['lowestMedian']:.2f}。"
-                "该差异未经显著性或混杂因素检验。"
+                + (
+                    "其他有效分组：" + "、".join(
+                        f"“{group['label']}”均值 {group['mean']:.2f}（n={group['count']}）"
+                        for group in item["groupStats"][1:-1]
+                    ) + "。"
+                    if len(item["groupStats"]) > 2 else ""
+                )
+                + "该差异未经显著性或混杂因素检验。"
             ),
             "details": item,
         }

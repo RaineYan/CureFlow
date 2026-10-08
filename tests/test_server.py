@@ -5,14 +5,18 @@ server. Request and response streams are in-memory BytesIO objects.
 """
 from __future__ import annotations
 
+import base64
 import json
 from io import BytesIO
+
+from openpyxl import Workbook, load_workbook
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from cureflow_app.server import ApiInputError, MAX_REQUEST_BYTES, make_handler
+from cureflow_app.interpretation_review import store_interpretation_for_review
 
 
 @pytest.fixture
@@ -69,6 +73,12 @@ def test_repair_issue_pages_bind_to_input_and_include_later_cells(handler_reques
     assert response["status"] == 200
     assert response["json"]["providerUsed"] is False
     assert response["json"]["summary"]["issueCount"] == 270
+    groups = response["json"]["summary"]["groups"]
+    assert response["json"]["summary"]["groupCount"] == 1
+    assert groups[0]["type"] == "trim_whitespace"
+    assert groups[0]["column"] == "备注"
+    assert groups[0]["count"] == 270
+    assert groups[0]["sampleCells"] == ["B2", "B3", "B4"]
     assert len(response["json"]["issues"]) == 20
     assert response["json"]["issues"][0]["location"]["cell"] == "B252"
     assert response["json"]["nextOffset"] is None
@@ -477,6 +487,78 @@ def test_analyze_rejects_field_role_outside_current_file(handler_request) -> Non
     assert "不属于当前读取范围" in response["json"]["error"]
 
 
+def test_xlsx_manual_rank_corrections_remain_numeric_and_reimport(handler_request) -> None:
+    from cureflow_app.server import _analysis_input
+    from workflow.repair_analysis import build_repair_plan
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "排名"
+    sheet.append(["样本编号", "排名", "总人数", "测量值"])
+    for index in range(1, 9):
+        sheet.append([
+            " S02 " if index == 2 else f"S{index:02d}",
+            None if index == 3 else (45 if index == 8 else index),
+            40,
+            90 + index,
+        ])
+    stream = BytesIO()
+    workbook.save(stream)
+    source = {
+        "filename": "rank-demo.xlsx",
+        "xlsxBase64": base64.b64encode(stream.getvalue()).decode("ascii"),
+        "selectedSheet": "排名",
+    }
+    csv_text, _, metadata, _ = _analysis_input(source)
+    plan = build_repair_plan(
+        csv_text, filename=source["filename"], sheet=metadata["sheet"],
+        source_row_numbers=metadata["sourceRowNumbers"],
+    )
+    rank_issue = next(item for item in plan["issues"] if item["type"] == "rank_out_of_range")
+    missing_issue = next(
+        item for item in plan["issues"]
+        if item["type"] == "missing_value" and item["location"]["column"] == "排名"
+    )
+    whitespace_issue = next(
+        item for item in plan["issues"]
+        if item["type"] == "trim_whitespace" and item["location"]["column"] == "样本编号"
+    )
+    payload = {
+        **source,
+        "approvedFixIds": [whitespace_issue["id"]],
+        "manualCorrections": [
+            {"issueId": rank_issue["id"], "newValue": "39"},
+            {"issueId": missing_issue["id"], "newValue": "3"},
+        ],
+        "confirmManualCorrections": True,
+    }
+    exported = _repair_export_json(handler_request, payload)
+    assert exported["status"] == 200
+    repaired = load_workbook(BytesIO(base64.b64decode(exported["json"]["xlsxBase64"])))
+    assert repaired["排名"]["B9"].value == 39
+    assert repaired["排名"]["B9"].data_type == "n"
+    assert repaired["排名"]["B4"].value == 3
+    assert repaired["排名"]["B4"].data_type == "n"
+    assert repaired["排名"]["A3"].value == "S02"
+    assert repaired["排名"]["A3"].data_type == "s"
+    reimported = _inspect_json(handler_request, {
+        "filename": exported["json"]["filename"],
+        "xlsxBase64": exported["json"]["xlsxBase64"],
+        "selectedSheet": "排名",
+    })
+    assert reimported["status"] == 200
+    assert reimported["json"]["rowCount"] == 8
+
+    invalid = _repair_export_json(handler_request, {
+        **source,
+        "approvedFixIds": [],
+        "manualCorrections": [{"issueId": rank_issue["id"], "newValue": "不是数字"}],
+        "confirmManualCorrections": True,
+    })
+    assert invalid["status"] == 400
+    assert "修正值必须是数字" in invalid["json"]["error"]
+
+
 def test_repair_preview_endpoint_returns_before_after_delta(handler_request) -> None:
     source = "编号,成绩\nA,999\nB,80\nC,90\nD,85\n"
     from workflow.repair_analysis import build_repair_plan
@@ -516,6 +598,31 @@ def test_analyze_exposes_claim_grounding_without_calling_a_judge_model(
     }
     assert payload["routing"]["calls"] == 6
     assert payload["routing"]["automaticFallback"] is False
+
+
+def test_ai_interpretation_review_http_previews_then_applies_without_provider(handler_request, tmp_path: Path) -> None:
+    result = _post_json(handler_request, _sample_payload())["json"]
+    ref = result["metrics"][0]["artifactRef"]
+    result["aiInterpretation"] = {
+        "summary": "待核对摘要", "findings": [{"title": "原结论", "explanation": "原解释", "evidenceRefs": [ref]}],
+        "actions": [], "limitations": [],
+    }
+    store_interpretation_for_review(result, tmp_path)
+    request = {
+        "runId": result["runId"], "inputFingerprint": result["input"]["inputFingerprint"],
+        "expectedRevision": 0, "kind": "finding", "index": 0, "decision": "revise",
+        "title": "核对后的结论", "explanation": "已由人核对的解释", "evidenceRefs": [ref],
+        "confirmedAgainstSource": True,
+    }
+    preview = handler_request("POST", "/api/interpretation/preview", json.dumps(request).encode("utf-8"))
+    assert preview["status"] == 200
+    assert preview["json"]["previewOnly"] is True
+    applied = handler_request("POST", "/api/interpretation/apply", json.dumps(request).encode("utf-8"))
+    assert applied["status"] == 200
+    assert applied["json"]["verification"]["providerCalled"] is False
+    assert "核对后的结论" in applied["json"]["report"]
+    stale = handler_request("POST", "/api/interpretation/apply", json.dumps(request).encode("utf-8"))
+    assert stale["status"] == 400
 
 
 def test_analyze_empty_csv(handler_request) -> None:
@@ -595,3 +702,23 @@ def test_cors_restricted_origin_is_echoed(tmp_path: Path) -> None:
     handler.do_GET()
     assert headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
     assert headers["Vary"] == "Origin"
+
+
+def test_analysis_brief_is_recorded_as_user_context_not_verified_fact(handler_request):
+    payload = {
+        "filename": "attendance.csv",
+        "csvText": "班级,应到,实到\n一班,45,42\n一班,44,40\n一班,46,43\n一班,45,41\n二班,47,39\n二班,47,38\n二班,46,40\n二班,48,39\n",
+        "analysisGoal": "group_comparison",
+        "analysisConfig": {"measureColumn": "实到", "groupColumn": "班级", "identifierColumn": "", "timeColumn": ""},
+        "analysisBrief": "这是晚自习出勤；请讨论班级差异还需要哪些教学背景。",
+        "providerMode": "offline",
+    }
+    response = _post_json(handler_request, payload)
+    assert response["status"] == 200
+    result = response["json"]
+    assert result["input"]["analysisBrief"] == payload["analysisBrief"]
+    assert "未经数据核验" in result["report"]
+    assert payload["analysisBrief"] in result["report"]
+    payload["analysisBrief"] = "x" * 501
+    rejected = _post_json(handler_request, payload)
+    assert rejected["status"] == 400

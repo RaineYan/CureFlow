@@ -4,7 +4,7 @@ import { readDataFile } from '../src/data-file.mjs';
 import { assertLiveProviderResult } from '../src/provider-response.mjs';
 import { buildIncidentFlow } from '../src/incident-flow.mjs';
 import { fetchLocalService, readServiceResponse, providerConnection, visibleProviderMode } from '../src/provider-connection.mjs';
-import { analysisSourceKey, analysisConfigKey, analysisResultKey, rememberAnalysis, recallAnalysis, rememberedForSource } from '../src/analysis-memory.mjs';
+import { analysisSourceKey, analysisConfigKey, analysisResultKey, rememberAnalysis, recallAnalysis, rememberedForSource, analysisHistoryTitle, analysisFieldRoles } from '../src/analysis-memory.mjs';
 import viteConfig from '../vite.config.mjs';
 
 test('analysis memory only reuses the same file, sheet, goal, fields, and provider', () => {
@@ -183,6 +183,21 @@ test('claim-only risk does not invent a data repair or exact propagation path', 
   assert.match(flow.steps[2].detail, /没有自动改写结论/);
 });
 
+test('human-reviewed AI interpretation updates only the report lane', () => {
+  const flow = buildIncidentFlow({
+    claims: [],
+    currentRecoveryPlan: { summary: { issueCount: 0 }, impactedTools: [], reusableTools: [] },
+    interpretationReview: { revision: 1, records: [{ decision: 'revise' }] },
+  });
+  assert.match(flow.steps[0].detail, /1 次模型解读人工复核/);
+  assert.equal(flow.steps[1].view, 'workspace');
+  assert.match(flow.steps[1].detail, /读者报告/);
+  assert.equal(flow.steps[2].status, '已复核');
+  assert.equal(flow.steps[3].status, '报告已重建');
+  assert.match(flow.steps[3].detail, /未获机器真实性证明/);
+  assert.match(flow.boundary, /不重新计算数据/);
+});
+
 test('completed recovery reports measured before and after, not planned savings', () => {
   const flow = buildIncidentFlow({ claims: [], currentRecoveryPlan: { summary: { issueCount: 1 } } }, {
     completedRecovery: {
@@ -202,4 +217,31 @@ test('completed recovery reports measured before and after, not planned savings'
   assert.match(flow.steps[3].detail, /4 → 1 项/);
   assert.doesNotMatch(flow.steps[3].detail, /节省/);
   assert.match(flow.boundary, /实际执行记录/);
+});
+
+test('history titles identify file, sheet, goal and keep user rename through updates', () => {
+  const cache=new Map();
+  const source=analysisSourceKey({inputFingerprint:'sha-a',selectedSheet:'Sheet A'},'a.xlsx');
+  const config={measureColumn:'收入',groupColumn:'',identifierColumn:'',timeColumn:''};
+  const key=analysisResultKey(source,'descriptive_profile',config,'offline');
+  const entry={sourceKey:source,goal:'descriptive_profile',config,mode:'offline',modeIdentity:'offline',createdAt:'2026-10-09T10:00:00Z',result:{runId:'one',input:{filename:'a.xlsx',sheet:'Sheet A'}}};
+  const title=analysisHistoryTitle(entry,[{key:'descriptive_profile',label:'现在是什么情况？'}]);
+  assert.match(title,/a\.xlsx · Sheet A · 现在是什么情况？/);
+  rememberAnalysis(cache,key,{...entry,title:'销售分析'});
+  rememberAnalysis(cache,key,{...entry,result:{...entry.result,runId:'two'}});
+  assert.equal(analysisHistoryTitle(cache.get(key),[]),'销售分析');
+});
+
+test('analysis request sends only supported field roles while retaining the brief separately', () => {
+  const config={measureColumn:'实到',groupColumn:'班级',identifierColumn:'',timeColumn:'',analysisBrief:'比较班级出勤的现实意义'};
+  assert.deepEqual(Object.keys(analysisFieldRoles(config)).sort(),['groupColumn','identifierColumn','measureColumn','timeColumn']);
+  assert.equal(analysisFieldRoles(config).measureColumn,'实到');
+  assert.equal(analysisFieldRoles(config).groupColumn,'班级');
+  assert.equal('analysisBrief' in analysisFieldRoles(config),false);
+});
+
+test('analysis brief is part of the result cache identity', () => {
+  const source=analysisSourceKey({inputFingerprint:'sha-a'},'a.csv');
+  const config={measureColumn:'分数',groupColumn:'班级',identifierColumn:'',timeColumn:'',analysisBrief:'关注教学安排'};
+  assert.notEqual(analysisResultKey(source,'group_comparison',config,'offline'),analysisResultKey(source,'group_comparison',{...config,analysisBrief:'关注学生差异'},'offline'));
 });

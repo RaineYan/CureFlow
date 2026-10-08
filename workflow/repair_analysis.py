@@ -195,6 +195,7 @@ def build_repair_plan(
     issues: list[dict[str, Any]] = []
     counts_by_type: dict[str, int] = defaultdict(int)
     counts_by_column: dict[str, int] = defaultdict(int)
+    counts_by_group: dict[tuple[str, str], dict[str, Any]] = {}
     iqr_screening: list[dict[str, Any]] = []
     matching_issue_count = 0
     requested_ids = {str(item) for item in include_issue_ids}
@@ -214,6 +215,14 @@ def build_repair_plan(
         affected_rows.add(source_row)
         counts_by_type[issue_type] += 1
         counts_by_column[column] += 1
+        group = counts_by_group.setdefault((issue_type, column), {
+            "type": issue_type, "column": column, "count": 0,
+            "severity": severity, "autoApplicable": auto_applicable,
+            "sampleCells": [], "reason": reason,
+        })
+        group["count"] += 1
+        if len(group["sampleCells"]) < 3:
+            group["sampleCells"].append(cell)
         issue_id = _issue_id(issue_type, sheet, cell, original)
         matches = (not issue_type_filter or issue_type == issue_type_filter) and (not column_filter or column == column_filter)
         if matches:
@@ -392,6 +401,14 @@ def build_repair_plan(
             "iqrScreening": iqr_screening,
             "byType": dict(sorted(counts_by_type.items(), key=lambda entry: (-entry[1], entry[0]))),
             "byColumn": dict(sorted(counts_by_column.items(), key=lambda entry: (-entry[1], entry[0]))),
+            "groupCount": len(counts_by_group),
+            "groups": sorted(
+                counts_by_group.values(),
+                key=lambda item: (
+                    {"high": 0, "medium": 1, "low": 2}.get(item["severity"], 3),
+                    -item["count"], item["type"], item["column"],
+                ),
+            )[:50],
         },
         "issues": issues,
         "policy": {

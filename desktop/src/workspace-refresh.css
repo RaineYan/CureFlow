@@ -122,6 +122,14 @@
 .review-dialog { width: min(1050px, 100%); }
 .review-dialog header p { max-width: 75ch; font-size: 14px; }
 .review-list { gap: 0; padding-right: 0; border-top: 1px solid var(--workspace-line); }
+.review-groups { margin-top: 12px; border: 1px solid var(--workspace-line); border-radius: 10px; }
+.review-groups > summary { padding: 12px 15px; cursor: pointer; color: #90dfd5; font-weight: 700; }
+.review-group-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; max-height: 220px; overflow: auto; padding: 0 12px 12px; }
+.review-group-list button { display: grid; gap: 5px; min-width: 0; padding: 10px; border: 1px solid var(--workspace-line); border-radius: 8px; background: #10243c; color: #e7f3ff; text-align: left; cursor: pointer; }
+.review-group-list button.active { border-color: #71d9ca; background: #1b3850; }
+.review-group-list small { overflow-wrap: anywhere; color: #a9c6d8; line-height: 1.45; }
+.review-group-list span, .review-progress { color: #9ed8d7; font-size: 13px; }
+.review-progress { margin: 10px 0; }
 .review-list .review-row { min-width: 0; border: 0; border-bottom: 1px solid var(--workspace-line); background: transparent; }
 .review-list .review-row:hover,
 .review-list .review-row[open] { background: rgba(68, 126, 164, .1); }
@@ -140,6 +148,25 @@
 .review-valid,
 .review-entry,
 .review-check { font-size: 14px; }
+
+.ai-review-dialog { width: min(760px, 100%); }
+.ai-review-scroll { overflow: auto; display: grid; gap: 16px; padding: 18px 2px; }
+.ai-review-before, .ai-review-preview { padding: 14px 16px; border: 1px solid var(--workspace-line); border-radius: 12px; background: rgba(30, 67, 96, .3); }
+.ai-review-before p, .ai-review-preview p { margin: 8px 0; line-height: 1.6; }
+.ai-review-before small, .ai-review-preview small { overflow-wrap: anywhere; color: #a9c6d8; }
+.ai-review-choice, .ai-review-evidence { display: grid; gap: 10px; margin: 0; padding: 12px 14px; border: 1px solid var(--workspace-line); border-radius: 12px; }
+.ai-review-choice label, .ai-review-evidence label, .ai-review-confirm { display: flex; align-items: flex-start; gap: 10px; }
+.ai-review-evidence { max-height: 170px; overflow-y: auto; }
+.ai-review-evidence label span { min-width: 0; display: grid; gap: 4px; }
+.ai-review-evidence small { overflow-wrap: anywhere; color: #9fc0d5; }
+.ai-review-field { display: grid; gap: 6px; font-weight: 700; }
+.ai-review-field input, .ai-review-field textarea { width: 100%; padding: 10px 12px; border: 1px solid #557293; border-radius: 8px; background: #0b1729; color: #f1f8ff; font: inherit; }
+.ai-review-confirm { line-height: 1.5; }
+.ai-review-dialog footer > div { display: flex; gap: 10px; flex-wrap: wrap; }
+.ai-review-status { padding: 10px 14px; border-left: 3px solid #6bd5c4; background: rgba(30, 67, 96, .25); }
+.ai-finding-grid article.rejected, .ai-actions > div.rejected { opacity: .65; }
+.ai-finding-grid article.rejected strong, .ai-actions > div.rejected strong { text-decoration: line-through; }
+.ai-finding-grid article button, .ai-actions button { margin-top: 8px; }
 
 button:focus-visible,
 summary:focus-visible,
@@ -170,3 +197,72 @@ input:focus-visible { outline: 2px solid var(--workspace-focus); outline-offset:
   .shell button,
   .shell summary { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+/* Desktop-only progressive disclosure keeps result states and actions visible. */
+
+.desktop-app .desktop-help{ display: inline-flex; position: relative; vertical-align: middle; margin: 0 5px; }
+.desktop-app .desktop-help-trigger{ display: inline-grid; width: 22px; height: 22px; padding: 0; place-items: center; border: 1px solid #729cac; border-radius: 50%; background: #1c425b; color: #d6f8f5; font-size: 12px; font-weight: 700; cursor: help; }
+.desktop-app .desktop-help-bubble{ position: absolute; z-index: 60; top: calc(100% + 9px); left: 0; width: min(340px, 68vw); padding: 12px 14px; border: 1px solid #75aec1; border-radius: 9px; background: #163149; box-shadow: 0 12px 30px rgba(0,0,0,.36); color: #eff8ff !important; font-size: 13px !important; font-weight: 400; line-height: 1.55; text-align: left; white-space: normal; opacity: 0; visibility: hidden; transform: translateY(-4px); transition: opacity .15s, transform .15s, visibility .15s; pointer-events: none; }
+.desktop-app .desktop-help:hover .desktop-help-bubble, .desktop-app .desktop-help:focus-within .desktop-help-bubble{ opacity: 1; visibility: visible; transform: translateY(0); }
+.desktop-app .desktop-help-trigger:hover, .desktop-app .desktop-help-trigger:focus-visible{ border-color: #9ef0df; background: #28617a; }
+.desktop-app .process-stages b, .desktop-app .preprocess-grid b, .desktop-app .analysis-extensions b{ font-size: 13px; line-height: 1.4; }
+.desktop-app .process-stages small, .desktop-app .analysis-extensions article span{ font-size: 12px; line-height: 1.4; }
+.desktop-app .preprocess-grid .desktop-help, .desktop-app .analysis-extensions > .desktop-help, .desktop-app .method-decisions > .desktop-help{ margin: 8px 6px; }
+.desktop-app .method-decision-grid article p{ font-size: 14px; }
+.desktop-app .method-decision-grid article .method-missing-fields{ color: #f0c682; font-weight: 650; }
+.desktop-app .toolbox-summary{ grid-template-columns: repeat(3,minmax(0,1fr)); }
+
+.desktop-app .analysis-extensions:has(.desktop-help){ overflow: visible; }
+.desktop-app .analysis-extensions .desktop-help{ display: inline-flex; }
+
+/* Analysis records own their overview and all follow-up pages. */
+.sidebar-history { margin-top: 14px; border-top: 1px solid var(--workspace-line); }
+.sidebar-history > summary { display: flex; align-items: center; gap: 6px; padding: 15px 8px 8px; color: #d7edf8; font-size: 14px; font-weight: 700; cursor: pointer; list-style: none; }
+.sidebar-history > summary::-webkit-details-marker { display: none; }
+.sidebar-history > summary::before { content: "▸"; color: #81d6ca; }
+.sidebar-history[open] > summary::before { content: "▾"; }
+.sidebar-history > summary span { margin-left: auto; color: #80e4d4; }
+.sidebar-history > p { margin: 10px 8px; color: #acc6d8; }
+.history-record { display: grid; grid-template-columns: minmax(0,1fr) 32px; margin: 6px 0; border: 1px solid transparent; border-radius: 9px; }
+.history-record.active { border-color: rgba(128,228,212,.5); background: rgba(37,94,107,.24); }
+.history-record .history-open { width: 100%; min-width: 0; padding: 9px 5px 9px 9px; text-align: left; border: 0; background: transparent; color: #e8f5ff; cursor: pointer; }
+.history-open b,.history-open small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-open small { margin-top: 3px; color: #a8c3d4; }
+.history-record .history-rename { padding: 0; border: 0; background: transparent; color: #a8d8e3; cursor: pointer; }
+.history-rename-form { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; padding: 6px; }
+.history-rename-form input { width: 100%; min-width: 0; padding: 7px; }
+.history-rename-form button { width: auto; min-height: 30px; padding: 3px 8px; }
+.history-subpages { grid-column: 1 / -1; display: grid; gap: 2px; padding: 2px 5px 7px 17px; }
+.history-subpages button { min-height: 34px; padding: 5px 8px; text-align: left; border: 0; border-radius: 5px; background: transparent; color: #bcd3e4; cursor: pointer; }
+.history-subpages button.active { background: rgba(128,228,212,.16); color: #e8fff9; font-weight: 700; }
+.analysis-overview[hidden] { display: none !important; }
+
+/* The evidence list uses the dialog's single scroll area; nested short scrolling hid choices. */
+.ai-review-evidence { max-height: none; overflow: visible; }
+.ai-review-dialog .ai-review-scroll { min-height: 0; overflow-y: auto; }
+.ai-review-evidence label { min-height: 44px; padding: 6px 0; }
+.ai-review-evidence label span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Resizable desktop navigation and readable analysis records. */
+.desktop-app .sidebar { width: var(--sidebar-width); padding-left: 18px; padding-right: 18px; }
+.desktop-app main { margin-left: var(--sidebar-width); }
+.sidebar-resizer { position: fixed; z-index: 30; inset: 0 auto 0 calc(var(--sidebar-width) - 4px); width: 8px; cursor: col-resize; touch-action: none; }
+.sidebar-resizer:hover,.sidebar-resizer.dragging,.sidebar-resizer:focus-visible { background: rgba(128,228,212,.32); outline: none; }
+.sidebar-history-list { max-height: 64vh; padding-right: 4px; }
+.sidebar nav .history-record .history-open { display: block; width: 100%; min-height: 0; padding: 10px; }
+.history-record .history-open b { display: block; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.45; }
+.sidebar nav .history-record .history-rename { display: flex; justify-content: center; align-items: flex-start; min-height: 0; padding: 11px 0; }
+.sidebar nav .history-subpages button { display: block; width: 100%; min-height: 32px; padding: 6px 9px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.analysis-context { margin: 12px 0; border-top: 1px solid var(--workspace-line); }
+.analysis-context summary { padding: 10px 0; color: #add5ee; font-size: 13px; cursor: pointer; }
+.analysis-context label { display: grid; gap: 7px; margin: 8px 0; color: #e9f5ff; font-size: 13px; }
+.analysis-context textarea { width: 100%; padding: 10px 12px; border: 1px solid #48729e; border-radius: 9px; color: #f5fbff; background: #0d2340; font: inherit; resize: vertical; }
+.analysis-context small { color: #9bb8d0; font-size: 11px; line-height: 1.5; }
+.comparison-chart .comparison-groups { max-height: 300px; overflow-y: auto; margin-top: 8px; padding-right: 6px; }
+.comparison-chart .comparison-groups p { align-items: baseline; gap: 12px; padding: 5px 0; border-bottom: 1px solid rgba(125,171,206,.16); color: #a8e9df; font-size: 12px; }
+.comparison-chart .comparison-groups p:last-child { border-bottom: 0; }
+.comparison-chart .comparison-groups p span { min-width: 0; overflow-wrap: anywhere; }
+.comparison-chart .comparison-groups p span small { margin-left: 8px; color: #8faec8; font-size: 10px; white-space: nowrap; }
+.comparison-chart .comparison-groups p b { flex: none; font-variant-numeric: tabular-nums; }
+.comparison-chart section .comparison-excluded { display: block; margin-top: 8px; color: #e8ba79; font-size: 10px; }
+@media (max-width: 850px) { .desktop-app .sidebar { width: 100%; } .desktop-app main { margin-left: 0; } .sidebar-resizer { display: none; } }

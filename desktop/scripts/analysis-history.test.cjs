@@ -60,3 +60,31 @@ test("analysis history fails closed when encryption is unavailable or file is co
   await assert.rejects(history.status(), /无法解密/);
   await assert.rejects(history.enable(), /无法解密/);
 });
+
+test("opted-in review decisions and correction drafts are encrypted and validated", async t => {
+  const { userData, history } = await temporaryStore(t);
+  const issueId = "fix_0123456789abcdef";
+  const withProgress = { ...entry, reviewProgress: {
+    runId: entry.result.runId, inputFingerprint: entry.result.input.inputFingerprint,
+    selectedFixIds: [issueId], reviewedValidIds: [],
+    manualCorrections: { [issueId]: "人工核实的值" },
+  } };
+  await history.enable([withProgress]);
+  const bytes = await fs.readFile(path.join(userData, "analysis-history.bin"));
+  assert.equal(bytes.includes(Buffer.from("人工核实的值")), false);
+  assert.deepEqual((await history.status()).entries[0].reviewProgress, withProgress.reviewProgress);
+  await assert.rejects(history.save([{ ...withProgress, reviewProgress: {
+    ...withProgress.reviewProgress, runId: "another-run",
+  } }]), /复核进度结构无效/);
+});
+
+test("rapid review saves are ordered and disabling cannot resurrect a record", async t => {
+  const { history } = await temporaryStore(t);
+  await history.enable();
+  const first = { ...entry, result: { ...entry.result, report: "first" } };
+  const latest = { ...entry, result: { ...entry.result, report: "latest" } };
+  await Promise.all([history.save([first]), history.save([latest])]);
+  assert.equal((await history.status()).entries[0].result.report, "latest");
+  await Promise.all([history.save([first]), history.disable()]);
+  assert.equal((await history.status()).enabled, false);
+});

@@ -19,6 +19,8 @@ from workflow.flexible_analysis import (
 )
 from workflow.repair_analysis import build_repair_plan
 from cureflow_app.server import make_handler, probe_provider_connection
+from cureflow_app.server import _build_plain_language_report
+from cureflow_app.interpretation_review import review_interpretation
 from cureflow_app.provider_runtime import (
     DesktopProviderError,
     DesktopProviderRuntime,
@@ -168,6 +170,50 @@ def _generic_csv() -> str:
         "2025-05-01 16:50,0.369,,A\n"
         "2025-05-01 17:00,8.500,2,B\n"
     )
+
+
+def test_generic_ai_review_rebuilds_report_without_second_provider_call(handler_request, tmp_path: Path) -> None:
+    client = GroundedInterpretationClient()
+    with patch("cureflow_app.server.DesktopProviderRuntime.resolve", return_value=_provider_run(client)):
+        response = handler_request({
+            "filename": "monitoring.csv", "csvText": _generic_csv(),
+            "providerMode": "openai_responses", "confirmLive": True,
+            "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 200, response["json"]
+    result = response["json"]
+    original_calls = len(client.prompts)
+    finding = result["aiInterpretation"]["findings"][0]
+    reviewed = review_interpretation({
+        "runId": result["runId"], "inputFingerprint": result["input"]["inputFingerprint"],
+        "expectedRevision": 0, "kind": "finding", "index": 0,
+        "decision": "revise", "title": "核实后的结论",
+        "explanation": "只描述已核实的汇总", "evidenceRefs": finding["evidenceRefs"],
+        "confirmedAgainstSource": True,
+    }, tmp_path, apply=True, render_report=_build_plain_language_report)
+    assert "核实后的结论" in reviewed["report"]
+    assert reviewed["report"].split("## 一句话看懂", 1)[1].split("## 你选择的分析", 1)[0] == (
+        result["report"].split("## 一句话看懂", 1)[1].split("## 你选择的分析", 1)[0]
+    )
+    assert reviewed["verification"]["providerCalled"] is False
+    assert len(client.prompts) == original_calls
+
+
+def test_review_index_failure_does_not_discard_completed_provider_result(handler_request) -> None:
+    client = GroundedInterpretationClient()
+    with patch("cureflow_app.server.DesktopProviderRuntime.resolve", return_value=_provider_run(client)), patch(
+        "cureflow_app.server.store_interpretation_for_review", side_effect=OSError("disk full")
+    ):
+        response = handler_request({
+            "filename": "monitoring.csv", "csvText": _generic_csv(),
+            "providerMode": "openai_responses", "confirmLive": True,
+            "confirmMaxCalls": 6,
+        })
+    assert response["status"] == 200, response["json"]
+    assert response["json"]["aiInterpretation"]["findings"]
+    assert response["json"]["interpretationReview"]["available"] is False
+    assert "disk full" not in json.dumps(response["json"])
+    assert len(client.prompts) == 1
 
 
 def _workbook_tables() -> list[dict[str, str]]:

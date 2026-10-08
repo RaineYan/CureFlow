@@ -9,6 +9,12 @@ const MAX_PLAINTEXT_BYTES = 8 * 1024 * 1024;
 
 function createAnalysisHistoryStore({ userData, encryption, platform = process.platform }) {
   const filePath = path.join(userData, "analysis-history.bin");
+  let mutation = Promise.resolve();
+  function inOrder(action) {
+    const next = mutation.then(action);
+    mutation = next.catch(() => {});
+    return next;
+  }
 
   function available() {
     return platform === "win32" && encryption.isEncryptionAvailable();
@@ -29,6 +35,22 @@ function createAnalysisHistoryStore({ userData, encryption, platform = process.p
           || !entry.result || typeof entry.result.runId !== "string"
           || !entry.result.input || typeof entry.result.input.inputFingerprint !== "string") {
         throw new Error("分析记录结构无效");
+      }
+      const progress = entry.reviewProgress;
+      if (progress !== undefined) {
+        const validIds = value => Array.isArray(value) && value.length <= 10000
+          && value.every(id => typeof id === "string" && /^fix_[0-9a-f]{16}$/.test(id));
+        if (!progress || typeof progress !== "object"
+            || progress.runId !== entry.result.runId
+            || progress.inputFingerprint !== entry.result.input.inputFingerprint
+            || !validIds(progress.selectedFixIds) || !validIds(progress.reviewedValidIds)
+            || !progress.manualCorrections || typeof progress.manualCorrections !== "object"
+            || Array.isArray(progress.manualCorrections)
+            || Object.keys(progress.manualCorrections).length > 10000
+            || Object.entries(progress.manualCorrections).some(([id, value]) =>
+              !/^fix_[0-9a-f]{16}$/.test(id) || typeof value !== "string" || value.length > 5000)) {
+          throw new Error("人工复核进度结构无效");
+        }
       }
     }
     return entries;
@@ -74,21 +96,21 @@ function createAnalysisHistoryStore({ userData, encryption, platform = process.p
       const entries = await read();
       return { available: true, enabled: entries !== null, entries: entries || [] };
     },
-    async enable(entries = []) {
+    enable(entries = []) { return inOrder(async () => {
       const existing = await read();
       if (existing !== null) return { available: true, enabled: true, entries: existing };
       await write(entries);
       return { available: true, enabled: true, entries };
-    },
-    async save(entries) {
+    }); },
+    save(entries) { return inOrder(async () => {
       if (await read() === null) throw new Error("请先明确开启本机加密保存");
       await write(entries);
       return { saved: entries.length };
-    },
-    async disable() {
+    }); },
+    disable() { return inOrder(async () => {
       await fs.rm(filePath, { force: true });
       return { available: available(), enabled: false, entries: [] };
-    },
+    }); },
   };
 }
 

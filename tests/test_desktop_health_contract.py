@@ -525,10 +525,10 @@ def test_windows_distribution_bundles_backend_without_provider_credentials() -> 
 def test_ui_exposes_grounded_ai_interpretation_and_privacy_boundary() -> None:
     source = _read("desktop/src/App.jsx")
     styles = _read("desktop/src/brand-theme.css")
-    assert "模型解读与下一步" in source
-    assert "需要人工复核" in source
-    assert "有效证据引用" in source
-    assert "建议你接下来这样做" in source
+    assert "模型解读与人工复核" in source
+    assert "待人工核对" in source
+    assert "条引用" in source
+    assert "建议动作" in source
     assert "不发送原始行、样例值及姓名/学号等字段中的具体值" in source
     assert ".ai-interpretation" in styles
     assert ".privacy-strip" in styles
@@ -559,7 +559,7 @@ def test_workspace_keeps_advanced_analysis_without_redundant_cards() -> None:
     assert '<details className="column-preview-details"' in source
     assert '<details className="sidebar-history"' in source
     assert '<details className="analysis-memory-panel"' not in source
-    assert '{result&&<div className="analysis-overview">' in source
+    assert '{result&&<div className="analysis-overview" hidden={activeView!=="overview"}>' in source
     assert ".view-workspace .hero-grid { grid-template-columns: minmax(0, 1fr)" in styles
 
 
@@ -571,14 +571,14 @@ def test_method_cards_distinguish_retrieval_from_partial_computation() -> None:
     assert "完整方法已执行" in source
 
 
-def test_session_analysis_history_lives_in_sidebar_and_opens_workspace() -> None:
+def test_session_analysis_history_lives_in_sidebar_and_opens_overview() -> None:
     source = _read("desktop/src/App.jsx")
     styles = _read("desktop/src/brand-theme.css")
     sidebar = source.split('<aside className="sidebar">', 1)[1].split("</aside>", 1)[0]
     assert sidebar.index('<nav aria-label="CureFlow 大任务">') < sidebar.index('<details className="sidebar-history"')
     assert "rememberedAnalyses.map(entry=>" in sidebar
     assert "onClick={()=>openRememberedAnalysis(entry)}" in sidebar
-    assert 'setRestoredFromMemory(true);setActiveView("workspace");' in source
+    assert 'setRestoredFromMemory(true);setActiveView("overview");' in source
     assert ".sidebar-history-list {" in styles
 
 
@@ -674,11 +674,11 @@ def test_workspace_has_one_contextual_next_action_without_losing_task_views() ->
     source = _read("desktop/src/App.jsx")
     styles = _read("desktop/src/workspace-refresh.css")
     assert 'className="task-next-action" aria-label="当前结果的建议操作"' in source
-    assert 'className="sidebar-secondary"' in source
+    assert 'className="history-subpages"' in source
     assert 'className="sidebar-settings"' in source
     assert 'taskViews.slice(1).map' in source
     assert ".task-next-action h2" in styles
-    assert ".sidebar-secondary button" in styles
+    assert ".sidebar nav .history-subpages button" in styles
 
 
 def test_review_queue_keeps_reason_visible_before_expanding_actions() -> None:

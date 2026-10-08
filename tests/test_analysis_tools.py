@@ -124,6 +124,26 @@ def test_quality_tool_counts_missing_and_duplicate_rows() -> None:
     assert {item["type"] for item in result["findings"]} >= {"missingness", "duplicate_rows"}
 
 
+def test_data_quality_labels_unselected_methods_separately_from_missing_conditions() -> None:
+    result = _run(
+        "时间,指标,分组\n2026-01-01,1,甲\n2026-01-02,2,甲\n2026-01-03,3,乙\n2026-01-04,4,乙\n",
+        goal="data_quality",
+    )
+    decisions = {item["method"]: item["status"] for item in result["analysisProcess"]["methodDecisions"]}
+    for method in ("时间顺序与采样间隔", "分组位置与离散度", "分类交叉计数", "连续字段线性相关"):
+        assert decisions[method] == "not_selected"
+
+
+def test_data_quality_with_numeric_values_generates_distribution_chart() -> None:
+    result = _run(
+        "编号,指标\n" + "\n".join(f"S{index},{index}" for index in range(1, 11)) + "\n",
+        goal="data_quality",
+    )
+    process = result["analysisProcess"]
+    assert process["stages"][2]["status"] == "completed"
+    assert any(chart["type"] == "histogram" for chart in process["visualizations"])
+
+
 def test_distribution_tool_reports_locations_without_calling_them_errors() -> None:
     csv_text = "样本,测量值\n" + "\n".join(
         f"S{index},{value}" for index, value in enumerate([10, 10, 11, 11, 12, 12, 13, 100])
@@ -356,12 +376,33 @@ def test_group_comparison_includes_median_and_spread_not_only_mean() -> None:
     assert comparison["highestStd"] > comparison["lowestStd"]
 
 
+def test_group_chart_retains_middle_group_and_sample_counts() -> None:
+    rows = ["班级,实到"]
+    rows += ["1班,26"] * 4
+    rows += ["2班,23"] * 4
+    rows += ["3班,25"] * 4
+    result = _run(
+        "\n".join(rows) + "\n", goal="group_comparison",
+        analysis_config={"groupColumn": "班级", "measureColumn": "实到"},
+    )
+    comparison = next(tool for tool in result["executedTools"] if tool["key"] == "group_comparison")["payload"]["comparisons"][0]
+    assert comparison["groupCount"] == 3
+    assert comparison["groupStats"] == [
+        {"label": "1班", "count": 4, "mean": 26.0, "median": 26.0, "std": 0.0},
+        {"label": "3班", "count": 4, "mean": 25.0, "median": 25.0, "std": 0.0},
+        {"label": "2班", "count": 4, "mean": 23.0, "median": 23.0, "std": 0.0},
+    ]
+    chart = next(item for item in result["analysisProcess"]["visualizations"] if item["key"] == "groups")
+    assert [group["label"] for group in chart["series"][0]["groups"]] == ["1班", "3班", "2班"]
+    assert "“3班”均值 25.00" in result["findings"][0]["explanation"]
+
+
 def test_method_decisions_distinguish_executed_from_skipped_and_link_basis() -> None:
     result = _run("编号,类别\nA,甲\nB,甲\nC,乙\nD,乙\n", goal="data_quality")
     decisions = {item["method"]: item for item in result["analysisProcess"]["methodDecisions"]}
     assert decisions["缺失、重复与分类频数"]["status"] == "executed"
     assert decisions["连续数值分布"]["status"] == "skipped"
-    assert decisions["时间顺序与采样间隔"]["status"] == "skipped"
+    assert decisions["时间顺序与采样间隔"]["status"] == "not_selected"
     assert decisions["缺失、重复与分类频数"]["sourceUrl"].startswith("https://www.itl.nist.gov/")
     assert decisions["连续数值分布"]["evidenceRef"] is None
 
