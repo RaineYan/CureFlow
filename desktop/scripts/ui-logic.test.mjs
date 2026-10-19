@@ -6,6 +6,29 @@ import { buildIncidentFlow } from '../src/incident-flow.mjs';
 import { fetchLocalService, readServiceResponse, providerConnection, visibleProviderMode } from '../src/provider-connection.mjs';
 import { analysisSourceKey, analysisConfigKey, analysisResultKey, rememberAnalysis, recallAnalysis, rememberedForSource, analysisHistoryTitle, analysisFieldRoles } from '../src/analysis-memory.mjs';
 import viteConfig from '../vite.config.mjs';
+import { paintAurora } from '../src/aurora-renderer.mjs';
+
+test('aurora rendering evolves over time and restores normal compositing', () => {
+  function render(seconds) {
+    const drawing = [];
+    const context = {
+      globalCompositeOperation: 'source-over',
+      clearRect: (...args) => drawing.push(['clear', ...args]),
+      createLinearGradient: (...args) => {
+        drawing.push(['gradient', ...args]);
+        return { addColorStop: (...stop) => drawing.push(['stop', ...stop]) };
+      },
+      fillRect: (...args) => drawing.push(['fill', ...args]),
+    };
+    paintAurora(context, 64, 90, seconds);
+    assert.equal(context.globalCompositeOperation, 'source-over');
+    assert.ok(drawing.some(command => command[0] === 'fill'));
+    assert.ok(drawing.flat().filter(value => typeof value === 'number').every(Number.isFinite));
+    return drawing;
+  }
+  assert.deepEqual(render(3), render(3));
+  assert.notDeepEqual(render(0), render(3));
+});
 
 test('zero-call AI reuse requires verified source, matching provider and zero usage', () => {
   const selected = { key: 'doubao', mode: 'doubao_chat' };

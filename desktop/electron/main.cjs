@@ -6,6 +6,8 @@ const { randomBytes } = require("node:crypto");
 const { readNativeDataFile } = require("./data-file.cjs");
 const { createAnalysisHistoryStore } = require("./analysis-history.cjs");
 
+if (process.platform === "win32") app.setAppUserModelId("cn.cureflow.desktop");
+
 // Isolate both source and packaged startup checks from the user's real data.
 if (process.env.CUREFLOW_SMOKE_USER_DATA) {
   app.setPath("userData", process.env.CUREFLOW_SMOKE_USER_DATA);
@@ -343,13 +345,26 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1440, height: 920, minWidth: 1100, minHeight: 720,
     backgroundColor: "#050b1a", title: "CureFlow",
-    icon: path.join(__dirname, "..", app.isPackaged ? "dist" : "public", "cureflow-logo.png"),
+    icon: path.join(__dirname, "..", app.isPackaged ? "dist" : "public", "cureflow-taskbar-transparent.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   });
   mainWindow = win;
+  if (process.platform === "win32") {
+    // Both the live window and the shell shortcut use the transparent C symbol.
+    const iconPath = path.join(__dirname, "..", app.isPackaged ? "dist" : "public", "cureflow-taskbar-clear-v2.ico");
+    win.setAppDetails({
+      appId: "cn.cureflow.desktop",
+      appIconPath: iconPath,
+      appIconIndex: 0,
+      relaunchCommand: app.isPackaged
+        ? `"${process.execPath}"`
+        : `"${process.execPath}" "${app.getAppPath()}"`,
+      relaunchDisplayName: "CureFlow",
+    });
+  }
   win.removeMenu();
   if (process.env.CUREFLOW_DEV_URL) await win.loadURL(process.env.CUREFLOW_DEV_URL);
   else await win.loadFile(path.join(__dirname, "..", "dist", "index.html"));

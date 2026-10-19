@@ -209,8 +209,54 @@ def test_desktop_uses_cureflow_brand_asset_and_logo_palette() -> None:
     assert source.count('./cureflow-logo.png') >= 2
     assert 'TRACE · ANALYZE · RECOVER' in source
     assert 'href="./cureflow-logo.png"' in html
-    assert '"cureflow-logo.png"' in main
+    assert '"cureflow-taskbar-transparent.png"' in main
+    assert '"cureflow-taskbar-clear-v2.ico"' in main
     assert "--brand-blue: #1769ff" in styles
+
+
+def test_transparent_window_icon_preserves_original_brand_and_packages_assets() -> None:
+    import hashlib
+    import json
+    import struct
+
+    public = ROOT / "desktop/public"
+    assert hashlib.sha256((public / "cureflow-logo.png").read_bytes()).hexdigest() == (
+        "8375a491f2bbbb6e6929c5a60b529567ea353802867490368f8789f53177acb9"
+    )
+    transparent = (public / "cureflow-taskbar-transparent.png").read_bytes()
+    assert transparent[:8] == b"\x89PNG\r\n\x1a\n"
+    # RGBA, not an opaque RGB replacement for the original brand asset.
+    assert struct.unpack(">IIBBBBB", transparent[16:29]) == (512, 512, 8, 6, 0, 0, 0)
+    icon = (public / "cureflow-taskbar-clear-v2.ico").read_bytes()
+    reserved, kind, count = struct.unpack("<HHH", icon[:6])
+    assert (reserved, kind, count) == (0, 1, 9)
+    sizes = set()
+    for index in range(count):
+        width, height, _, _, _, _, length, offset = struct.unpack_from("<BBBBHHII", icon, 6 + index * 16)
+        assert (width or 256) == (height or 256)
+        assert length > 0 and offset >= 6 + count * 16 and offset + length <= len(icon)
+        sizes.add(width or 256)
+    assert {16, 32, 48, 256} <= sizes
+    package = json.loads(_read("desktop/package.json"))
+    assert package["build"]["win"]["icon"] == "public/cureflow-taskbar-clear-v2.ico"
+    assert '"dist/**/*"' in _read("desktop/package.json")
+    assert 'app.isPackaged ? "dist" : "public"' in _read("desktop/electron/main.cjs")
+
+
+def test_aurora_is_decorative_and_stops_for_visibility_and_motion_preferences() -> None:
+    main = _read("desktop/src/main.jsx")
+    source = _read("desktop/src/AuroraBackground.jsx")
+    styles = _read("desktop/src/aurora.css")
+    assert "<AuroraBackground /><App />" in main
+    assert 'import "./aurora.css"' in main
+    assert 'aria-hidden="true"' in source
+    assert "pointer-events: none" in styles
+    assert "(prefers-reduced-motion: reduce)" in source
+    assert "document.hidden || motion.matches" in source
+    assert 'document.removeEventListener("visibilitychange", resume)' in source
+    assert 'motion.removeEventListener("change", resume)' in source
+    assert "window.cancelAnimationFrame(frame)" in source
+    assert "resize.disconnect()" in source
 
 
 def test_sidebar_uses_original_cureflow_logo() -> None:

@@ -1,0 +1,43 @@
+/* Bounded auroral curtains, with the application surfaces kept opaque. */
+#root { isolation: isolate; }
+.aurora-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  contain: strict;
+  background: #070f20;
+  --aurora-strength: .9;
+}
+.aurora-ribbons {
+  position: absolute;
+  top: -65px;
+  right: -3%;
+  width: min(1100px, 83vw);
+  height: clamp(300px, 34vw, 420px);
+  opacity: var(--aurora-strength);
+  filter: blur(1.1px);
+  pointer-events: none;
+  transition: opacity .5s ease;
+}
+.shell, .shell > main, .engine-launcher { background: transparent; }
+.engine-launcher .launcher-glow { display: none; }
+.shell main > header { position: relative; }
+#root:has(.view-overview) .aurora-background { --aurora-strength: .62; }
+#root:has(.view-workflow) .aurora-background { --aurora-strength: .55; }
+#root:has(.view-grounding) .aurora-background,
+#root:has(.view-evidence) .aurora-background { --aurora-strength: .48; }
+#root:has(.view-recovery) .aurora-background { --aurora-strength: .36; }
+#root:has(.engine-launcher) .aurora-background { --aurora-strength: .68; }
+#root:has(.review-dialog, .ai-review-dialog) .aurora-background { --aurora-strength: .18; }
+@media (max-width: 850px) {
+  .aurora-ribbons { width: 110vw; height: 250px; right: -14%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aurora-ribbons { transition: none; }
+}
+@media print, (forced-colors: active) {
+  .aurora-background { display: none; }
+}

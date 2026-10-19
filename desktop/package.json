@@ -57,7 +57,7 @@
     ],
     "win": {
       "target": ["nsis"],
-      "icon": "public/cureflow-logo.png",
+      "icon": "public/cureflow-taskbar-clear-v2.ico",
       "forceCodeSigning": true,
       "signExts": ["cureflow-backend.exe"]
     },
