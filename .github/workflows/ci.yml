@@ -34,6 +34,7 @@ jobs:
           tests/test_server.py
           tests/test_xlsx_upload.py
           tests/test_interpretation_review.py
+          tests/test_selective_interpretation.py
           tests/test_desktop_health_contract.py
           tests/test_desktop_build.py
       - name: Test desktop logic

@@ -7,6 +7,31 @@ import { fetchLocalService, readServiceResponse, providerConnection, visibleProv
 import { analysisSourceKey, analysisConfigKey, analysisResultKey, rememberAnalysis, recallAnalysis, rememberedForSource, analysisHistoryTitle, analysisFieldRoles } from '../src/analysis-memory.mjs';
 import viteConfig from '../vite.config.mjs';
 
+test('zero-call AI reuse requires verified source, matching provider and zero usage', () => {
+  const selected = { key: 'doubao', mode: 'doubao_chat' };
+  const result = {
+    mode: 'DOUBAO_CHAT_LIVE',
+    provider: { name: 'doubao', live: true, calledThisRun: false, reused: true },
+    aiRecovery: { mode: 'reuse_all', evidenceVerified: true, reusedFindingCount: 1, sourceRunId: 'source-run' },
+    recoveryExecution: { sourceRunId: 'source-run' },
+    cost: { llmCalls: 0, totalTokens: 0 },
+  };
+  assert.doesNotThrow(() => assertLiveProviderResult(result, selected));
+  for (const mutate of [
+    r => { r.aiRecovery.evidenceVerified = false; },
+    r => { r.aiRecovery.sourceRunId = 'another-run'; },
+    r => { r.provider.calledThisRun = true; },
+    r => { r.cost.totalTokens = 100; },
+    r => { r.aiRecovery.reusedFindingCount = 0; },
+    r => { r.provider.name = 'openai'; },
+    r => { r.mode = 'OFFLINE'; },
+  ]) {
+    const invalid = structuredClone(result);
+    mutate(invalid);
+    assert.throws(() => assertLiveProviderResult(invalid, selected));
+  }
+});
+
 test('analysis memory only reuses the same file, sheet, goal, fields, and provider', () => {
   const cache = new Map();
   const source = analysisSourceKey({ inputFingerprint: 'sha-a', selectedSheet: 'Sheet A' }, 'a.xlsx');
