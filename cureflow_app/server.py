@@ -1422,7 +1422,7 @@ def _generate_generic_interpretation(
 
     usage_reported = response.usage_type.value == "provider_reported"
     estimated_price = (
-        estimated_list_price_usd(response.input_tokens, response.output_tokens)
+        estimated_list_price_usd(response.input_tokens, response.output_tokens, model=provider_run.model)
         if usage_reported and provider_run.provider == "openai" else None
     )
     interpretation.update({
@@ -2033,7 +2033,7 @@ def _analyze_csv_with_provider(
                         else "unavailable"
                     ),
                     "estimatedListPriceUsd": (
-                        estimated_list_price_usd(input_tokens, output_tokens)
+                        estimated_list_price_usd(input_tokens, output_tokens, model=provider_run.model)
                         if reported and provider_run.provider == "openai"
                         else None
                     ),
@@ -2094,7 +2094,7 @@ def _analyze_csv_with_provider(
         "usageType": usage_type,
         "estimatedListPriceUsd": (
             estimated_list_price_usd(
-                result.total_input_tokens, result.total_output_tokens
+                result.total_input_tokens, result.total_output_tokens, model=provider_run.model
             )
             if (
                 live
@@ -2280,7 +2280,7 @@ def make_handler(
                     if provider not in _PROVIDERS:
                         raise KeyStoreError("不支持的模型服务")
                     if method == "POST":
-                        expected_fields = {"apiKey", "modelId"} if provider == "doubao" else {"apiKey"}
+                        expected_fields = {"apiKey", "modelId"} if provider == "doubao" or "modelId" in body else {"apiKey"}
                         if set(body) != expected_fields:
                             raise KeyStoreError("请求格式不正确")
                         active_store.set(provider, body["apiKey"], body.get("modelId"))

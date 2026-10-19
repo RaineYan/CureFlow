@@ -51,6 +51,17 @@ DOUBAO_MODEL = "doubao-seed-2-0-pro-260215"
 DOUBAO_MODEL_ENV = "DOUBAO_MODEL"
 DOUBAO_KEY_ENV = "DOUBAO_API_KEY"
 DOUBAO_LIVE_CONFIRM_ENV = "CUREFLOW_ENABLE_DOUBAO_LIVE"
+DESKTOP_MODEL_ENVS = {
+    "openai": "CUREFLOW_OPENAI_MODEL", "qwen": "CUREFLOW_QWEN_MODEL",
+    "deepseek": "CUREFLOW_DEEPSEEK_MODEL", "doubao": DOUBAO_MODEL_ENV,
+}
+
+
+def desktop_model(provider: str, default: str) -> str:
+    """Desktop user configuration only; frozen experiment models stay intact."""
+    return os.environ.get(DESKTOP_MODEL_ENVS[provider]) or default
+
+
 # A complete Desktop workflow has six LLM execution units: three branch
 # claims plus three report sections.  This product-run ceiling is therefore
 # 6.  It is intentionally separate from OPENAI_AB_PILOT_V1's 3-call ceiling,
@@ -202,22 +213,24 @@ class DesktopProviderRuntime:
         openai = cloud_status(
             provider="openai",
             mode=OPENAI_MODE,
-            model=OPENAI_MODEL,
+            model=desktop_model("openai", OPENAI_MODEL),
             key_env=OPENAI_KEY_ENV,
             confirm_env=LIVE_CONFIRM_ENV,
         )
-        openai["priceSnapshot"] = PRICE_SNAPSHOT
+        openai["priceSnapshot"] = PRICE_SNAPSHOT if openai["model"] == OPENAI_MODEL else {
+            "available": False, "reason": "自选模型未配置可信报价；不沿用其他模型价格",
+        }
         qwen = cloud_status(
             provider="qwen",
             mode=QWEN_MODE,
-            model=QWEN_MODEL,
+            model=desktop_model("qwen", QWEN_MODEL),
             key_env=QWEN_KEY_ENV,
             confirm_env=QWEN_LIVE_CONFIRM_ENV,
         )
         deepseek = cloud_status(
             provider="deepseek",
             mode=DEEPSEEK_MODE,
-            model=DEEPSEEK_MODEL,
+            model=desktop_model("deepseek", DEEPSEEK_MODEL),
             key_env=DEEPSEEK_KEY_ENV,
             confirm_env=DEEPSEEK_LIVE_CONFIRM_ENV,
         )
@@ -268,16 +281,16 @@ class DesktopProviderRuntime:
             )
         provider_specs = {
             OPENAI_MODE: {
-                "provider": "openai", "model": OPENAI_MODEL,
+                "provider": "openai", "model": desktop_model("openai", OPENAI_MODEL),
                 "key_env": OPENAI_KEY_ENV, "confirm_env": LIVE_CONFIRM_ENV,
             },
             QWEN_MODE: {
-                "provider": "qwen", "model": QWEN_MODEL,
+                "provider": "qwen", "model": desktop_model("qwen", QWEN_MODEL),
                 "key_env": QWEN_KEY_ENV, "confirm_env": QWEN_LIVE_CONFIRM_ENV,
                 "base_url": QWEN_BASE_URL,
             },
             DEEPSEEK_MODE: {
-                "provider": "deepseek", "model": DEEPSEEK_MODEL,
+                "provider": "deepseek", "model": desktop_model("deepseek", DEEPSEEK_MODEL),
                 "key_env": DEEPSEEK_KEY_ENV,
                 "confirm_env": DEEPSEEK_LIVE_CONFIRM_ENV,
                 "base_url": DEEPSEEK_BASE_URL,
@@ -317,7 +330,7 @@ class DesktopProviderRuntime:
                     mode=ProviderMode.OPENAI_RESPONSES,
                     allow_live=True,
                     openai=OpenAIResponsesConfig(
-                        model=OPENAI_MODEL,
+                        model=spec["model"],
                         api_key_env_var=OPENAI_KEY_ENV,
                         max_retries=0,
                     ),
@@ -361,7 +374,9 @@ class DesktopProviderRuntime:
         )
 
 
-def estimated_list_price_usd(input_tokens: int, output_tokens: int) -> float:
+def estimated_list_price_usd(input_tokens: int, output_tokens: int, *, model: str = OPENAI_MODEL) -> float | None:
+    if model != OPENAI_MODEL:
+        return None
     value = (
         input_tokens * PRICE_SNAPSHOT["inputUsdPerMillionTokens"]
         + output_tokens * PRICE_SNAPSHOT["outputUsdPerMillionTokens"]

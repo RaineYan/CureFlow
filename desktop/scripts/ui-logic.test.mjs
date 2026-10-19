@@ -7,6 +7,70 @@ import { fetchLocalService, readServiceResponse, providerConnection, visibleProv
 import { analysisSourceKey, analysisConfigKey, analysisResultKey, rememberAnalysis, recallAnalysis, rememberedForSource, analysisHistoryTitle, analysisFieldRoles } from '../src/analysis-memory.mjs';
 import viteConfig from '../vite.config.mjs';
 import { paintAurora } from '../src/aurora-renderer.mjs';
+import { providerSetupPayload } from '../src/provider-setup.mjs';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+test('customer configuration accepts actual model IDs and rejects malformed settings safely', () => {
+  for (const provider of ['openai', 'qwen', 'deepseek', 'doubao']) {
+    const payload = providerSetupPayload(provider, ' unit-test-not-a-real-key ', ' user-enabled-model ');
+    assert.deepEqual(payload, { provider, modelId: 'user-enabled-model', apiKey: 'unit-test-not-a-real-key' });
+    assert.deepEqual(providerSetupPayload(provider, '', 'user-enabled-model', true), {
+      provider, modelId: 'user-enabled-model', useExistingEnvironmentKey: true,
+    });
+  }
+  for (const [key, model] of [['short', 'model'], ['with space key', 'model'], ['unit-test-key', ''], ['unit-test-key', 'bad model'], ['unit-test-key', 'bad\0model'], ['unit-test-key', 'unit-test-key']]) {
+    assert.throws(() => providerSetupPayload('doubao', key, model), error => !error.message.includes(key || 'NO_KEY'));
+  }
+  assert.throws(() => providerSetupPayload('unknown', 'unit-test-key', 'model'));
+});
+
+function desktopConfigurationHarness(ok = true) {
+  const source = readFileSync(new URL('../electron/main.cjs', import.meta.url), 'utf8');
+  const start = source.indexOf('ipcMain.handle("cureflow:configure-provider"');
+  const end = source.indexOf('ipcMain.handle("cureflow:keys"', start);
+  let handler;
+  const sent = [], session = Object.create(null);
+  vm.runInNewContext(source.slice(start, end), {
+    ipcMain: { handle: (name, callback) => { handler = callback; } },
+    assertTrustedRenderer: event => { if (!event.trusted) throw new Error('untrusted'); },
+    PROVIDER_SESSION_CONFIG: { doubao: { keyEnv: 'DOUBAO_API_KEY', confirmEnv: 'CUREFLOW_ENABLE_DOUBAO_LIVE', modelEnv: 'DOUBAO_MODEL' } },
+    sessionProviderEnv: session, backendUrl: 'http://127.0.0.1:8766', desktopKeyToken: 'test-private-transport-token',
+    restartBackend: () => { throw new Error('Configuration must not restart or bypass the stop switch'); },
+    fetch: async (url, options) => {
+      sent.push({ url, options });
+      return { ok, json: async () => ok ? { doubao: { model: 'user-enabled-model', ready: false } } : { error: '云调用已停用' } };
+    },
+  });
+  return { handler, sent, session };
+}
+
+test('desktop updates own key without restart, using only the private local channel', async () => {
+  const { handler, sent, session } = desktopConfigurationHarness();
+  const result = await handler({ trusted: true }, { provider: 'doubao', apiKey: 'unit-test-not-a-real-key', modelId: 'user-enabled-model' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, 'http://127.0.0.1:8766/api/provider/configure');
+  assert.equal(sent[0].options.headers['X-CureFlow-Desktop-Token'], 'test-private-transport-token');
+  assert.equal(JSON.parse(sent[0].options.body).apiKey, 'unit-test-not-a-real-key');
+  assert.equal(session.DOUBAO_API_KEY, 'unit-test-not-a-real-key');
+  assert.equal(session.DOUBAO_MODEL, 'user-enabled-model');
+  assert.equal(JSON.stringify(result).includes('unit-test-not-a-real-key'), false);
+});
+
+test('backend rejection cannot replace previous session credentials or restart away the stop switch', async () => {
+  const { handler, session } = desktopConfigurationHarness(false);
+  session.DOUBAO_API_KEY = 'unit-test-previous-session-key';
+  await assert.rejects(handler({ trusted: true }, { provider: 'doubao', apiKey: 'unit-test-not-a-real-key', modelId: 'user-enabled-model' }), /已停用/);
+  assert.equal(session.DOUBAO_API_KEY, 'unit-test-previous-session-key');
+  assert.equal(session.CUREFLOW_ENABLE_DOUBAO_LIVE, undefined);
+});
+
+test('desktop rejects untrusted renderer and malformed key before transport', async () => {
+  const { handler, sent } = desktopConfigurationHarness();
+  await assert.rejects(handler({ trusted: false }, { provider: 'doubao', apiKey: 'unit-test-key' }), /untrusted/);
+  await assert.rejects(handler({ trusted: true }, { provider: 'doubao', apiKey: 'bad key value' }), /格式/);
+  assert.equal(sent.length, 0);
+});
 
 test('aurora rendering evolves over time and restores normal compositing', () => {
   function render(seconds) {

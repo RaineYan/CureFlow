@@ -30,14 +30,17 @@ const STDERR_DIALOG_THRESHOLD = 20;
 const PROVIDER_SESSION_CONFIG = Object.freeze({
   openai: {
     keyEnv: "OPENAI_API_KEY",
+    modelEnv: "CUREFLOW_OPENAI_MODEL",
     confirmEnv: "CUREFLOW_ENABLE_OPENAI_LIVE",
   },
   qwen: {
     keyEnv: "QWEN_API_KEY",
+    modelEnv: "CUREFLOW_QWEN_MODEL",
     confirmEnv: "CUREFLOW_ENABLE_QWEN_LIVE",
   },
   deepseek: {
     keyEnv: "DEEPSEEK_API_KEY",
+    modelEnv: "CUREFLOW_DEEPSEEK_MODEL",
     confirmEnv: "CUREFLOW_ENABLE_DEEPSEEK_LIVE",
   },
   doubao: {
@@ -199,48 +202,35 @@ ipcMain.handle("cureflow:configure-provider", async (event, payload) => {
   const spec = PROVIDER_SESSION_CONFIG[provider];
   if (!spec) throw new Error("不支持的模型服务");
   const useExistingEnvironmentKey = payload?.useExistingEnvironmentKey === true;
-  let modelId = typeof payload?.modelId === "string" ? payload.modelId.trim() : "";
-  if (provider === "doubao") {
-    modelId = modelId || String(sessionProviderEnv.DOUBAO_MODEL || process.env.DOUBAO_MODEL || "").trim();
-    if (!modelId && useExistingEnvironmentKey) {
-      const current = await fetch(`${backendUrl}/api/provider-status`).then(response => response.json());
-      modelId = String(current.doubao?.model || "").trim();
-    }
-    modelId = modelId || DOUBAO_MODEL;
-    if (!modelId || modelId.length > 128 || /\s/.test(modelId)) throw new Error("请填写已开通的火山方舟模型或接入点 ID");
+  if (useExistingEnvironmentKey && payload?.apiKey !== undefined) throw new Error("请选择输入密钥或使用已有密钥其中一种方式");
+  const modelId = typeof payload?.modelId === "string" ? payload.modelId.trim() : undefined;
+  if (payload?.modelId !== undefined && (!modelId || modelId.length > 128 || /[\s\x00-\x1f]/.test(modelId))) {
+    throw new Error("请填写该服务实际开通的模型或接入点 ID");
   }
-  if (useExistingEnvironmentKey) {
-    const response = await fetch(`${backendUrl}/api/provider/configure`, {
-      method: "POST",
-      headers: { "X-CureFlow-Desktop-Token": desktopKeyToken, "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, useExistingEnvironmentKey: true, confirmSession: true, ...(provider === "doubao" ? { modelId } : {}) }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "已有密钥无法启用");
-    return result;
-  }
-  let apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
-  {
-    if (apiKey.length < 8 || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey)) {
-      throw new Error("API key 格式无效");
-    }
-    sessionProviderEnv[spec.keyEnv] = apiKey;
-  }
-  if (provider === "doubao") sessionProviderEnv.DOUBAO_MODEL = modelId;
+  let apiKey = useExistingEnvironmentKey ? "" : (typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "");
+  if (!useExistingEnvironmentKey && (apiKey.length < 8 || apiKey.length > 4096 || /[\s\x00-\x1f]/.test(apiKey))) throw new Error("API key 格式无效");
+  if (!useExistingEnvironmentKey && modelId === apiKey) throw new Error("模型 ID 与 API Key 不能相同");
+  // Update only this provider in the existing backend. Restarting here reset
+  // other verified connections and could bypass a previously activated stop.
+  const response = await fetch(backendUrl + "/api/provider/configure", {
+    method: "POST",
+    headers: { "X-CureFlow-Desktop-Token": desktopKeyToken, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(useExistingEnvironmentKey
+        ? { provider, useExistingEnvironmentKey: true, confirmSession: true }
+        : { provider, apiKey, confirmSession: true }),
+      ...(modelId ? { modelId } : {}),
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "模型配置失败");
+  // Mirror accepted session settings in memory for an explicit future restart.
+  // Never read or return a saved key to the renderer.
+  if (!useExistingEnvironmentKey) sessionProviderEnv[spec.keyEnv] = apiKey;
+  if (result[provider]?.model) sessionProviderEnv[spec.modelEnv] = result[provider].model;
   sessionProviderEnv[spec.confirmEnv] = "1";
   apiKey = "";
-  try {
-    await restartBackend();
-    const response = await fetch(`${backendUrl}/api/provider-status`);
-    if (!response.ok) throw new Error("连接状态检查失败");
-    return await response.json();
-  } catch (error) {
-    if (!useExistingEnvironmentKey) delete sessionProviderEnv[spec.keyEnv];
-    delete sessionProviderEnv[spec.confirmEnv];
-    if (spec.modelEnv) delete sessionProviderEnv[spec.modelEnv];
-    await restartBackend().catch(() => {});
-    throw error;
-  }
+  return result;
 });
 
 ipcMain.handle("cureflow:keys", async (event, payload) => {
@@ -265,7 +255,7 @@ ipcMain.handle("cureflow:keys", async (event, payload) => {
     const key = payload?.apiKey;
     if (typeof key !== "string" || key.length < 8 || key.length > 4096 || /\s/.test(key)) throw new Error("密钥格式无效");
     body = { apiKey: key };
-    if (provider === "doubao") {
+    if (provider === "doubao" || payload?.modelId !== undefined) {
       const modelId = payload?.modelId || DOUBAO_MODEL;
       if (typeof modelId !== "string" || !modelId || modelId.length > 128 || /\s/.test(modelId)) throw new Error("请填写已开通的火山方舟模型或接入点 ID");
       body.modelId = modelId;

@@ -81,9 +81,9 @@ class KeyStore:
                         or not isinstance(record.get("ciphertext"), str)
                         or not isinstance(record.get("fingerprint"), str)
                         or not re.fullmatch(r"[0-9a-f]{12}", record["fingerprint"])
-                        or (provider == "doubao" and (not isinstance(record.get("modelId"), str)
+                        or ((provider == "doubao" or "modelId" in record) and (not isinstance(record.get("modelId"), str)
                             or not record["modelId"] or len(record["modelId"]) > 128
-                            or any(c.isspace() for c in record["modelId"])))):
+                            or any(c.isspace() or ord(c) < 32 for c in record["modelId"])))):
                     raise ValueError()
             return data
         except (OSError, ValueError, UnicodeError) as exc:
@@ -116,20 +116,22 @@ class KeyStore:
         self.path.unlink(missing_ok=True)
 
     def set(self, provider: str, key: str, model_id: str | None = None) -> str:
-        if provider not in PROVIDERS or not isinstance(key, str) or not 8 <= len(key) <= 4096 or any(c.isspace() for c in key):
+        if provider not in PROVIDERS or not isinstance(key, str) or not 8 <= len(key) <= 4096 or any(c.isspace() or ord(c) < 32 for c in key):
             raise KeyStoreError("模型或密钥格式无效")
+        if model_id == key:
+            raise KeyStoreError("模型 ID 与密钥不能相同，不会将密钥写入模型信息")
         data = self._read()
         if not data["optedIn"]:
             raise KeyStoreError("请先明确开启本机加密保存")
-        if provider == "doubao" and (not isinstance(model_id, str) or not model_id or len(model_id) > 128 or any(c.isspace() for c in model_id)):
-            raise KeyStoreError("保存豆包密钥前需填写已开通的模型或接入点 ID")
+        if (provider == "doubao" or model_id is not None) and (not isinstance(model_id, str) or not model_id or len(model_id) > 128 or any(c.isspace() or ord(c) < 32 for c in model_id)):
+            raise KeyStoreError("保存密钥前需填写实际开通的模型或接入点 ID")
         ciphertext = _protect(key.encode("utf-8"))
         fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
         data["keys"][provider] = {
             "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
             "fingerprint": fingerprint,
         }
-        if provider == "doubao":
+        if model_id is not None:
             data["keys"][provider]["modelId"] = model_id
         self._write(data)
         return fingerprint

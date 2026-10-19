@@ -69,7 +69,7 @@ def test_renderer_has_explicit_multi_provider_opt_in_and_kill_switch() -> None:
     assert 'onClick={()=>connectSelectedProvider(false)}' in source
     assert 'type="password"' in source
     assert "window.cureflow?.configureProvider" in source
-    assert "apiKey:typedKey" in source
+    assert "providerSetupPayload(provider,typedKey,modelId,useExistingEnvironmentKey)" in source
     assert "configure(payload)" in source
     assert 'mode:"openai_responses"' in source
     assert 'mode:"qwen_chat"' in source
@@ -116,10 +116,12 @@ def test_first_run_allows_provider_free_file_check_without_cloud_model() -> None
     assert "使用 AI 解读（最多 6 次调用）" in source
     assert "局域网访问者不能使用此配置入口" in source
     assert 'model:"doubao-seed-2-0-pro-260215"' in source
-    assert 'const modelId=provider==="doubao"?selectedProvider.model:undefined' in source
-    assert 'providerModelId' not in source
-    assert '火山方舟实际开通的模型或接入点 ID<input' not in source
-    assert '{canConfigureProvider?<><div className="key-entry">' in source
+    assert 'const modelId=providerModelId.trim()' in source
+    assert 'aria-label="模型 ID"' in source
+    assert 'aria-label="自己的 API Key"' in source
+    assert 'canConfigureProvider?<><p>' in source
+    assert '(!selectedProviderReady||editingProvider)' in source
+    assert '更换自己的 API Key / 管理保存' in source
     assert '<div className="key-entry">' in source
 
 
@@ -142,7 +144,8 @@ def test_main_keeps_session_keys_in_memory_and_delegates_opt_in_persistence() ->
     assert 'ipcMain.handle("cureflow:configure-provider"' in source
     assert "const sessionProviderEnv = Object.create(null)" in source
     assert "...sessionProviderEnv" in source
-    assert "delete sessionProviderEnv[spec.keyEnv]" in source
+    assert 'if (!response.ok) throw new Error(result.error || "模型配置失败")' in source
+    assert 'if (!useExistingEnvironmentKey) sessionProviderEnv[spec.keyEnv] = apiKey' in source
     assert "for (const key of Object.keys(sessionProviderEnv)) delete sessionProviderEnv[key]" in source
     handler_start = source.index('ipcMain.handle("cureflow:configure-provider"')
     handler_end = source.index("async function waitForBackend", handler_start)
@@ -693,7 +696,7 @@ def test_scaled_ui_keeps_field_roles_readable_and_provider_status_actionable() -
     assert "云调用：本次启动已允许" in connection
     assert "云调用：尚未允许（配置密钥时完成）" in connection
     assert "允许并验证已有密钥（1 次调用）" in source
-    assert 'apiKey:typedKey' in source
+    assert 'providerSetupPayload(provider,typedKey,modelId,useExistingEnvironmentKey)' in source
     assert '"/api/provider/probe"' in source
     assert "未发送用户文件" in source
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
